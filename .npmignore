@@ -1,0 +1,19 @@
+# Package lock
+package-lock.json
+
+# Node Modules
+node_modules
+
+# Source Files, only keeping the dist folder
+src
+
+# Ignore file files
+.gitignore
+.npmignore
+
+# Config files
+.prettierrc
+eslint.config.mjs
+jest.config.js
+tsconfig.json
+tsup.config.ts
