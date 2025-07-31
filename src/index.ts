@@ -1,5 +1,5 @@
 export {
-  arrayToObject as arrayToMap,
+  arrayToObject,
   arrayToGroup,
   mappedArrayToObject,
   mappedArrayToGroup,
