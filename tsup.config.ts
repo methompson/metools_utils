@@ -10,6 +10,6 @@ export default defineConfig({
   minifyWhitespace: false,
   minifySyntax: false,
   treeshake: false,
-  format: ['esm'],
+  format: ['cjs', 'esm'],
   dts: true,
 });
