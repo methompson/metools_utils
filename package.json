@@ -1,6 +1,6 @@
 {
   "name": "@metools/utils",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "main": "dist/index.cjs",
   "module": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -32,19 +32,19 @@
   "scripts": {
     "build": "tsup",
     "lint": "eslint",
-    "test": "jest"
+    "test": "vitest --run",
+    "test:watch": "vitest"
   },
   "devDependencies": {
-    "@jest/globals": "^30.0.5",
-    "@types/jest": "^30.0.0",
+    "@types/node": "^24.3.0",
     "@typescript-eslint/parser": "^8.38.0",
+    "eslint": "^9.33.0",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.3",
-    "jest": "^30.0.5",
     "prettier": "^3.6.2",
-    "ts-jest": "^29.4.0",
     "tsup": "^8.5.0",
     "typescript": "^5.8.3",
-    "typescript-eslint": "^8.38.0"
+    "typescript-eslint": "^8.38.0",
+    "vitest": "^3.2.4"
   }
 }

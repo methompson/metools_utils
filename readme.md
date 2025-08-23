@@ -6,7 +6,7 @@ This project contains a handful of tools I've developed in the past to help me m
 
 ### arrayToObject
 
-```typescript
+```ts
 function arrayToObject<T>(
   input: T[],
   keygen: (kInput: T) => string | number,
@@ -19,7 +19,7 @@ This function is generally used to convert an arary into a hashmap. This provide
 
 ### Example
 
-```javascript
+```js
 // An array of user objects
 const users = await getUsers();
 
@@ -40,7 +40,7 @@ const myUserSlow = users.find((user) => user.id === someUserId);
 
 ### arrayToGroup
 
-```typescript
+```ts
 function arrayToGroup<T>(
   input: T[],
   keygen: (kInput: T) => string | number,
@@ -53,7 +53,7 @@ For example, you may have an array of transactions and you'd like to group these
 
 ### Example
 
-```javascript
+```js
 // A list of transactions
 const transactions = await getTransactions();
 
@@ -74,7 +74,7 @@ const userTxsSlow = transactions.filter((tx) => tx.userId === someUserId);
 
 ### mappedArrayToObject
 
-```typescript
+```ts
 function mappedArrayToObject<T, U>(
   input: T[],
   keygen: (kInput: T) => string | number,
@@ -86,7 +86,7 @@ This function combines `arrayToObject` with something similar to `Array.prototyp
 
 ### Example
 
-```javascript
+```js
 // An array of user objects
 const users = await getUsers();
 
@@ -124,7 +124,7 @@ const userTransactions = mappedArrayToObject(
 
 ### mappedArrayToGroup
 
-```typescript
+```ts
 function mappedArrayToGroup<T, U>(
   input: T[],
   keygen: (kInput: T) => string | number,
@@ -138,7 +138,7 @@ For instance, you may want to transform the data into something simple for expor
 
 ### Example
 
-```javascript
+```js
 // Returns an array of complciated transaction objects
 const userTransactions = await getUserTransactions();
 
@@ -153,4 +153,26 @@ const simpleTransactions = mappedArrayToGroup(
     date: tx.date,
   }),
 );
+```
+
+### toPlainObject
+
+```ts
+function toPlainObject(data: unknown): unknown;
+```
+
+`toPlainObject` is a debugging utility meant to convert potentially complicated objects into simple objects for debugging purposes. This function is not meant for production use. There are some situations where values in use may be difficult to discern, especially with proxied values. This function just serializes, then deserializes into a plain JS object or array so that the values are easier to interpret when debugging functions.
+
+```js
+// A complicated class with getters, proxied values and other things that make it difficult to debug
+const val = new ComplicatedClass();
+
+// Now a plain JS Object
+const plainVal = toPlainObject(val);
+
+// An array of complicated objects
+const manyComplicatedValues = getComplicatedValues();
+
+// Now an array of plain JS objects
+const simplifiedValues = toPlainObject(manyComplicatedValues);
 ```

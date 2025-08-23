@@ -3,4 +3,6 @@ export {
   arrayToGroup,
   mappedArrayToObject,
   mappedArrayToGroup,
-} from './array_to_object';
+} from './utils/array_to_object';
+
+export { toPlainObject, xyz } from './utils/to_plain_object';
