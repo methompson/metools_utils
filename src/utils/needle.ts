@@ -4,7 +4,7 @@ function isUndefinedOrNull(value: unknown): value is undefined | null {
   return value === undefined || value === null;
 }
 
-interface TaskQueueConstructorInput {
+export interface TaskQueueConstructorInput {
   totalWorkers?: number;
   tasks: TaskType[];
 }
@@ -13,7 +13,6 @@ const ALL_WORKERS_IDLE_EVENT = 'all_workers_idle';
 const TASK_ERROR_EVENT = 'task_error';
 const TASK_COMPLETED_EVENT = 'TaskCompletedEvent';
 
-// TODO modify the custom event to include the error object
 export class TaskQueueErrorEvent extends Event {
   private _error: unknown;
   constructor(error: unknown) {
@@ -32,7 +31,6 @@ export class TaskCompletedEvent extends Event {
   }
 }
 
-// TODO modify the custom event to include metrics
 export class TaskQueueCompletedEvent extends Event {
   private _successfulTasks: number;
   private _failedTasks: number;
@@ -180,31 +178,4 @@ export class TaskQueue extends EventTarget {
   static ALL_WORKERS_IDLE = ALL_WORKERS_IDLE_EVENT;
   static TASK_ERROR = TASK_ERROR_EVENT;
   static TASK_COMPLETED = TASK_COMPLETED_EVENT;
-}
-
-interface RunTaskWorkersInput {
-  totalWorkers?: number;
-  tasks: TaskType[];
-}
-
-/**
- * Convenience function to run a set of tasks with a specified number of workers.
- */
-export async function runTaskWorkers(args: RunTaskWorkersInput) {
-  const { totalWorkers, tasks } = args;
-
-  const taskQueue = new TaskQueue({
-    totalWorkers,
-    tasks,
-  });
-
-  return new Promise<void>((res, rej) => {
-    taskQueue.startExecution();
-    taskQueue.addEventListener('all_workers_idle', () => {
-      res();
-    });
-    taskQueue.addEventListener('Errored_task', (ev) => {
-      rej(ev);
-    });
-  });
 }
