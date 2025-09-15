@@ -24,8 +24,8 @@ describe('split', () => {
 
   test('can handle an array with multiple types', () => {
     const arr = [1, 'two', 3, 'four', 5, true, null, {}, []];
-    const [numbers, strings] = split(arr, (item) => typeof item === 'number');
+    const [numbers, others] = split(arr, (item) => typeof item === 'number');
     expect(numbers).toEqual([1, 3, 5]);
-    expect(strings).toEqual(['two', 'four', true, null, {}, []]);
+    expect(others).toEqual(['two', 'four', true, null, {}, []]);
   });
 });

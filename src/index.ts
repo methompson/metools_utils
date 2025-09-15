@@ -9,6 +9,6 @@ export { toPlainObject, xyz } from './utils/to_plain_object';
 
 export { split } from './utils/split';
 
-export { TaskQueue, TaskQueueConstructorInput } from './utils/needle';
+export { TaskQueue, TaskQueueConstructorInput } from './utils/task_queue';
 
 export { wait } from './utils/wait';

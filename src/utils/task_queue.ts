@@ -50,6 +50,22 @@ export class TaskQueueCompletedEvent extends Event {
   }
 }
 
+// TODOs:
+// - Add getters that return metrics about the queue
+//   - Total tasks
+//   - Successful tasks
+//   - Failed tasks
+//   - Pending tasks
+//   - Active tasks
+//   - Idle workers
+//   - Currently running tasks
+// - Add ability to pause the queue
+// - Add ability to stop the queue
+// - Add a timeout to tasks
+// - Add retries
+// - Add retry delay
+// - Provide a way to force retry a failed task from the TASK_ERROR event
+
 /**
  * A task queue to manage and execute asynchronous tasks in sequence.
  * Should allow for more jobs than workers, and queue them up to be executed

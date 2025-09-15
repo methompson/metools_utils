@@ -1,6 +1,10 @@
-import { TaskQueue, TaskQueueCompletedEvent } from './needle';
+import {
+  TaskQueue,
+  TaskQueueCompletedEvent,
+  TaskQueueErrorEvent,
+} from './task_queue';
 
-describe('Needle Utility', () => {
+describe('TaskQueue', () => {
   test('can execute several tasks at the same time', async () => {
     const fn = vi.fn(
       async () =>
@@ -20,13 +24,13 @@ describe('Needle Utility', () => {
     const start = performance.now();
 
     await new Promise<void>((res, rej) => {
-      taskQueue.startExecution();
       taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE, () => {
         res();
       });
       taskQueue.addEventListener(TaskQueue.TASK_ERROR, () => {
         rej();
       });
+      taskQueue.startExecution();
     });
 
     const end = performance.now();
@@ -134,6 +138,38 @@ describe('Needle Utility', () => {
     expect(successfulTask).toHaveBeenCalledTimes(10);
     expect(failingTask).toHaveBeenCalledTimes(10);
     expect(end - start).toBeLessThan(20);
+  });
+
+  test('Passes an error object with the TASK_ERROR event', async () => {
+    const failingTask = vi.fn(
+      async () =>
+        new Promise<void>((res, rej) => {
+          setTimeout(() => {
+            rej(new Error('Task failed'));
+          }, 10);
+        }),
+    );
+
+    const taskQueue = new TaskQueue({
+      totalWorkers: 30,
+      tasks: [failingTask],
+    });
+
+    await new Promise<void>((res) => {
+      taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE, () => {
+        res();
+      });
+      taskQueue.addEventListener(TaskQueue.TASK_ERROR, (ev) => {
+        expect(ev instanceof TaskQueueErrorEvent).toBe(true);
+        if (ev instanceof TaskQueueErrorEvent) {
+          expect(ev.error).toBeInstanceOf(Error);
+          expect((ev.error as Error).message).toBe('Task failed');
+        }
+      });
+      taskQueue.startExecution();
+    });
+
+    expect(failingTask).toHaveBeenCalledTimes(1);
   });
 
   test('can handle more tasks than workers', async () => {
