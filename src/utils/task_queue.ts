@@ -6,7 +6,8 @@ function isUndefinedOrNull(value: unknown): value is undefined | null {
 
 export interface TaskQueueConstructorInput {
   totalWorkers?: number;
-  tasks: TaskType[];
+  tasks?: TaskType[];
+  retries?: number;
 }
 
 const ALL_WORKERS_IDLE_EVENT = 'all_workers_idle';
@@ -34,20 +35,34 @@ export class TaskCompletedEvent extends Event {
 export class TaskQueueCompletedEvent extends Event {
   private _successfulTasks: number;
   private _failedTasks: number;
+  private _totalTasks: number;
 
-  constructor(args: { successfulTasks: number; failedTasks: number }) {
+  constructor(args: {
+    successfulTasks: number;
+    failedTasks: number;
+    totalTasks: number;
+  }) {
     super(ALL_WORKERS_IDLE_EVENT);
     this._successfulTasks = args.successfulTasks;
     this._failedTasks = args.failedTasks;
+    this._totalTasks = args.totalTasks;
   }
 
   get successfulTasks(): number {
     return this._successfulTasks;
   }
-
   get failedTasks(): number {
     return this._failedTasks;
   }
+  get totalTasks(): number {
+    return this._totalTasks;
+  }
+}
+
+interface QueuedTask {
+  task: TaskType;
+  attempts: number;
+  failures: TaskQueueErrorEvent[];
 }
 
 // TODOs:
@@ -72,35 +87,62 @@ export class TaskQueueCompletedEvent extends Event {
  * as workers become available.
  */
 export class TaskQueue extends EventTarget {
-  private tasks: TaskType[] = [];
+  private tasks: QueuedTask[] = [];
 
-  private completeTasks: TaskType[] = [];
-  private failedTasks: { task: TaskType; error: unknown }[] = [];
-  private totalWorkers: number = 30;
+  private totalUniqueTasksAdded: number = 0;
 
-  private workers: Record<string, TaskType | null> = {};
+  private _completeTasks: QueuedTask[] = [];
+  private _failedTasks: { task: QueuedTask; error: unknown }[] = [];
+  private _totalWorkers: number = 30;
+
+  private workers: Record<string, QueuedTask | null> = {};
+  private retries: number = 0;
+
+  private continueRunning = true;
 
   constructor(args: TaskQueueConstructorInput) {
     super();
 
-    const { totalWorkers, tasks } = args;
+    const { totalWorkers, tasks, retries } = args;
+
+    this.retries = retries ?? 0;
 
     // Check > 0
     if (!isUndefinedOrNull(totalWorkers) && totalWorkers > 0) {
       // Coerce to an integer
-      this.totalWorkers = Math.trunc(totalWorkers);
+      this._totalWorkers = Math.trunc(totalWorkers);
     }
 
     // Initialize the task array
-    if (!isUndefinedOrNull(tasks)) {
-      this.tasks = tasks;
-    }
+    const toAdd = Array.isArray(tasks) ? tasks : [];
+    this.addTasks(toAdd);
 
     // initialize the worker object
-    const workArr = Array.from({ length: this.totalWorkers }, (_, i) => i);
+    const workArr = Array.from({ length: this._totalWorkers }, (_, i) => i);
     for (const workerId of workArr) {
       this.workers[workerId] = null;
     }
+  }
+
+  get pendingTasks(): number {
+    return this.tasks.length;
+  }
+  get completedTasks(): number {
+    return this._completeTasks.length;
+  }
+  get failedTasks(): number {
+    return this._failedTasks.length;
+  }
+  get totalWorkers(): number {
+    return this._totalWorkers;
+  }
+  get totalTasks(): number {
+    return this.totalUniqueTasksAdded;
+  }
+
+  private addTask(task: TaskType): void {
+    this.totalUniqueTasksAdded += 1;
+    this.tasks.push({ task, attempts: 0, failures: [] });
   }
 
   /**
@@ -109,10 +151,9 @@ export class TaskQueue extends EventTarget {
    * @param task A single task or an array of tasks to add to the queue
    */
   addTasks(task: TaskType | TaskType[]): void {
-    if (Array.isArray(task)) {
-      this.tasks.push(...task);
-    } else {
-      this.tasks.push(task);
+    const toAdd = Array.isArray(task) ? task : [task];
+    for (const t of toAdd) {
+      this.addTask(t);
     }
   }
 
@@ -120,19 +161,69 @@ export class TaskQueue extends EventTarget {
    * Starts executing tasks in the queue. Resolves when all tasks are complete.
    */
   startExecution(): void {
+    this.continueRunning = true;
+
     for (const workerId of Object.keys(this.workers)) {
       const task = this.getNextTask();
       if (task) {
         this.runTask(workerId, task);
-      } else {
       }
     }
+
+    if (this.allWorkersIdle()) {
+      this.sendAllDone();
+    }
+  }
+
+  private eventListeners: Record<string, EventListenerOrEventListenerObject[]> =
+    {};
+
+  addEventListener(
+    type: string,
+    callback: EventListenerOrEventListenerObject | null,
+    options?: AddEventListenerOptions | boolean,
+  ) {
+    super.addEventListener(type, callback, options);
+
+    if (callback) {
+      const evs = this.eventListeners[type] ?? [];
+      evs.push(callback);
+      this.eventListeners[type] = evs;
+    }
+  }
+
+  clearEventListeners() {
+    for (const [type, listeners] of Object.entries(this.eventListeners)) {
+      for (const listener of listeners) {
+        super.removeEventListener(type, listener);
+      }
+    }
+    this.eventListeners = {};
+  }
+
+  /**
+   * Stops the queue after the currently running tasks complete.
+   * Most Promises cannot be cancelled, so this will not stop
+   * currently running tasks.
+   */
+  stop(): void {
+    this.continueRunning = false;
+  }
+
+  clearQueue() {
+    if (!this.allWorkersIdle()) {
+      throw new Error('Cannot clear the queue while tasks are running');
+    }
+    this.tasks = [];
+    this.totalUniqueTasksAdded = 0;
+    this._completeTasks = [];
+    this._failedTasks = [];
   }
 
   /**
    * Slice off the next task in the queue
    */
-  private getNextTask(): TaskType | undefined {
+  private getNextTask(): QueuedTask | undefined {
     return this.tasks.shift();
   }
 
@@ -142,26 +233,43 @@ export class TaskQueue extends EventTarget {
    * If no next task, marks the worker as idle. Waits until all workers are idle
    * to dispatch the 'all_workers_idle' event.
    */
-  private async runTask(index: string | number, task: TaskType): Promise<void> {
-    this.workers[index] = task;
+  private async runTask(
+    index: string | number,
+    queuedTask: QueuedTask,
+  ): Promise<void> {
+    this.workers[index] = queuedTask;
 
     try {
+      queuedTask.attempts += 1;
       // Start Task
-      await task();
+      await queuedTask.task();
 
-      this.completeTasks.push(task);
+      this._completeTasks.push(queuedTask);
 
       // On Completion, dispatch a completed event
       this.dispatchEvent(new TaskCompletedEvent());
     } catch (e) {
       // TODO pass the error object with the event
 
-      this.failedTasks.push({ task, error: e });
+      queuedTask.failures.push(new TaskQueueErrorEvent(e));
+      this._failedTasks.push({ task: queuedTask, error: e });
       this.dispatchEvent(new TaskQueueErrorEvent(e));
+
+      if (this.retries && queuedTask.attempts <= this.retries) {
+        this.tasks.push(queuedTask);
+      }
     }
 
     // Mark worker as free
     this.workers[index] = null;
+
+    if (!this.continueRunning) {
+      if (this.allWorkersIdle()) {
+        this.sendAllDone();
+      }
+      // If we are not continuing, we're going to stop here
+      return;
+    }
 
     // Get the next task
     const nextTask = this.getNextTask();
@@ -173,18 +281,20 @@ export class TaskQueue extends EventTarget {
       // If no next task, check if all workers are idle
       if (this.allWorkersIdle()) {
         // TODO add metrics to the event
-        this.dispatchEvent(
-          new TaskQueueCompletedEvent({
-            successfulTasks: this.completeTasks.length,
-            failedTasks: this.failedTasks.length,
-          }),
-        );
-
-        this.completeTasks = [];
-        this.failedTasks = [];
+        this.sendAllDone();
       }
       // Otherwise, do nothing and wait for other workers to finish
     }
+  }
+
+  private sendAllDone() {
+    this.dispatchEvent(
+      new TaskQueueCompletedEvent({
+        successfulTasks: this._completeTasks.length,
+        failedTasks: this._failedTasks.length,
+        totalTasks: this.totalUniqueTasksAdded,
+      }),
+    );
   }
 
   private allWorkersIdle(): boolean {
@@ -194,4 +304,35 @@ export class TaskQueue extends EventTarget {
   static ALL_WORKERS_IDLE = ALL_WORKERS_IDLE_EVENT;
   static TASK_ERROR = TASK_ERROR_EVENT;
   static TASK_COMPLETED = TASK_COMPLETED_EVENT;
+}
+
+export interface RunTaskQueueArgs extends TaskQueueConstructorInput {
+  onSuccess?: () => void | Promise<void>;
+  onTaskError?: (error: unknown) => void | Promise<void>;
+  onTaskCompleted?: () => void | Promise<void>;
+}
+
+/**
+ * Convenience function to run a task queue without needing to
+ * set up all of the event listeners manually.
+ */
+export async function runTaskQueue(args: RunTaskQueueArgs) {
+  const taskQueue = new TaskQueue({
+    totalWorkers: args.totalWorkers ?? 30,
+    tasks: args.tasks,
+  });
+
+  return new Promise<void>((res) => {
+    taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE, () => {
+      args?.onSuccess?.();
+      res();
+    });
+    taskQueue.addEventListener(TaskQueue.TASK_COMPLETED, () => {
+      args?.onTaskCompleted?.();
+    });
+    taskQueue.addEventListener(TaskQueue.TASK_ERROR, (ev) => {
+      args?.onTaskError?.(ev);
+    });
+    taskQueue.startExecution();
+  });
 }

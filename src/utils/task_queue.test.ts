@@ -172,6 +172,25 @@ describe('TaskQueue', () => {
     expect(failingTask).toHaveBeenCalledTimes(1);
   });
 
+  test('can handle an empty task list', async () => {
+    const taskQueue = new TaskQueue({
+      totalWorkers: 30,
+      tasks: [],
+    });
+
+    await new Promise<void>((res, rej) => {
+      taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE, () => {
+        res();
+      });
+      taskQueue.addEventListener(TaskQueue.TASK_ERROR, () => {
+        rej();
+      });
+      taskQueue.startExecution();
+    });
+
+    expect(true).toBe(true);
+  });
+
   test('can handle more tasks than workers', async () => {
     const fn = vi.fn(
       async () =>
@@ -206,5 +225,215 @@ describe('TaskQueue', () => {
     // 10 ms per group = 40ms total.
     expect(fn).toHaveBeenCalledTimes(100);
     expect(end - start).toBeLessThan(50);
+  });
+
+  test('can retry failed tasks a set number of times', async () => {
+    const successfulTasks = vi.fn(
+      async () =>
+        new Promise<void>((res) => {
+          setTimeout(() => {
+            res();
+          }, 1);
+        }),
+    );
+
+    const failingTask = vi.fn(
+      async () =>
+        new Promise<void>((res, rej) => {
+          setTimeout(() => {
+            rej(new Error('Task failed'));
+          }, 1);
+        }),
+    );
+
+    const severalTasks = Array.from({ length: 20 }, () => successfulTasks);
+
+    const taskQueue = new TaskQueue({
+      totalWorkers: 30,
+      tasks: [failingTask, ...severalTasks],
+      retries: 3,
+    });
+
+    const ev = await new Promise<TaskQueueCompletedEvent>((res, rej) => {
+      taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE, (ev) => {
+        expect(ev instanceof TaskQueueCompletedEvent).toBe(true);
+        if (ev instanceof TaskQueueCompletedEvent) {
+          res(ev);
+        }
+
+        rej();
+      });
+      taskQueue.startExecution();
+    });
+
+    expect(ev.successfulTasks).toBe(20);
+    expect(ev.failedTasks).toBe(4);
+
+    // 21 total tasks, 20 above and 1 failing task retried 4 times
+    expect(ev.totalTasks).toBe(21);
+  });
+
+  test('can stop a queue', async () => {
+    const fn = vi.fn(
+      async () =>
+        new Promise<void>((res) => {
+          setTimeout(() => {
+            res();
+          }, 10);
+        }),
+    );
+    const severalTasks = Array.from({ length: 20 }, () => fn);
+
+    const taskQueue = new TaskQueue({
+      totalWorkers: 5,
+      tasks: severalTasks,
+    });
+
+    await new Promise<void>((res, rej) => {
+      taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE, () => {
+        res();
+      });
+      taskQueue.addEventListener(TaskQueue.TASK_ERROR, () => {
+        rej();
+      });
+      taskQueue.startExecution();
+      taskQueue.stop();
+    });
+
+    expect(fn).toHaveBeenCalledTimes(5);
+  });
+
+  test('event listeners can be cleared', async () => {
+    const fn = vi.fn(
+      async () =>
+        new Promise<void>((res) => {
+          setTimeout(() => {
+            res();
+          }, 10);
+        }),
+    );
+    const severalTasks = Array.from({ length: 20 }, () => fn);
+
+    const taskQueue = new TaskQueue({
+      totalWorkers: 5,
+      tasks: severalTasks,
+    });
+
+    let initialEventListnerRun = 0;
+
+    await new Promise<void>((res, rej) => {
+      taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE, () => {
+        res();
+        initialEventListnerRun += 1;
+
+        taskQueue.clearEventListeners();
+      });
+      taskQueue.addEventListener(TaskQueue.TASK_ERROR, () => {
+        rej();
+      });
+      taskQueue.startExecution();
+      taskQueue.stop();
+    });
+
+    await new Promise<void>((res, rej) => {
+      taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE, () => {
+        res();
+      });
+      taskQueue.addEventListener(TaskQueue.TASK_ERROR, () => {
+        rej();
+      });
+      taskQueue.startExecution();
+    });
+
+    expect(initialEventListnerRun).toBe(1);
+    expect(fn).toHaveBeenCalledTimes(20);
+  });
+
+  test('can restart after being stopped', async () => {
+    const fn = vi.fn(
+      async () =>
+        new Promise<void>((res) => {
+          setTimeout(() => {
+            res();
+          }, 10);
+        }),
+    );
+    const severalTasks = Array.from({ length: 20 }, () => fn);
+
+    const taskQueue = new TaskQueue({
+      totalWorkers: 5,
+      tasks: severalTasks,
+    });
+
+    await new Promise<void>((res, rej) => {
+      taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE, () => {
+        res();
+      });
+      taskQueue.addEventListener(TaskQueue.TASK_ERROR, () => {
+        rej();
+      });
+      taskQueue.startExecution();
+      taskQueue.stop();
+    });
+
+    taskQueue.clearEventListeners();
+
+    await new Promise<void>((res, rej) => {
+      taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE, () => {
+        res();
+      });
+      taskQueue.addEventListener(TaskQueue.TASK_ERROR, () => {
+        rej();
+      });
+      taskQueue.startExecution();
+    });
+
+    expect(fn).toHaveBeenCalledTimes(20);
+  });
+
+  test('the queue can be cleared', async () => {
+    const fn = vi.fn(
+      async () =>
+        new Promise<void>((res) => {
+          setTimeout(() => {
+            res();
+          }, 10);
+        }),
+    );
+    const severalTasks = Array.from({ length: 20 }, () => fn);
+
+    const taskQueue = new TaskQueue({
+      totalWorkers: 5,
+      tasks: severalTasks,
+    });
+
+    await new Promise<void>((res, rej) => {
+      taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE, () => {
+        res();
+      });
+      taskQueue.addEventListener(TaskQueue.TASK_ERROR, () => {
+        rej();
+      });
+      taskQueue.startExecution();
+      taskQueue.stop();
+    });
+
+    expect(fn).toHaveBeenCalledTimes(5);
+
+    taskQueue.clearEventListeners();
+    taskQueue.clearQueue();
+
+    await new Promise<void>((res, rej) => {
+      taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE, () => {
+        res();
+      });
+      taskQueue.addEventListener(TaskQueue.TASK_ERROR, () => {
+        rej();
+      });
+      taskQueue.startExecution();
+    });
+
+    // Unchanged
+    expect(fn).toHaveBeenCalledTimes(5);
   });
 });

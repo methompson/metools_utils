@@ -206,15 +206,17 @@ const [pass, fail] = split(arr, (el) => typeof el === 'string');
 type TaskType = () => Promise<unknown> | (() => unknown);
 
 interface TaskQueueConstructorInput {
-  totalWorkers?: number;
-  tasks: TaskType[];
+  totalWorkers?: number; // Defaults to 30
+  tasks: TaskType[]; // Pre-fills the tasks
 }
 
-class TaskQueue;
+class TaskQueue extends EventTarget;
 
 // Methods
 constructor TaskQueue(args: TaskQueueConstructorInput): TaskQueue;
+// Adds more tasks. Can be run while tasks are executing to add more tasks
 TaskQueue.addTasks(task: TaskType | TaskType[]): void
+// Starts executing the tasks.
 TaskQueue.startExecution(): void;
 
 // Static Values
