@@ -15,7 +15,7 @@ const TASK_ERROR_EVENT = 'task_error';
 const TASK_COMPLETED_EVENT = 'TaskCompletedEvent';
 
 export class TaskQueueErrorEvent extends Event {
-  private _error: unknown;
+  protected _error: unknown;
   constructor(error: unknown) {
     super(TASK_ERROR_EVENT);
     this._error = error;
@@ -33,9 +33,9 @@ export class TaskCompletedEvent extends Event {
 }
 
 export class TaskQueueCompletedEvent extends Event {
-  private _successfulTasks: number;
-  private _failedTasks: number;
-  private _totalTasks: number;
+  protected _successfulTasks: number;
+  protected _failedTasks: number;
+  protected _totalTasks: number;
 
   constructor(args: {
     successfulTasks: number;
@@ -59,10 +59,69 @@ export class TaskQueueCompletedEvent extends Event {
   }
 }
 
+/**
+ * Used to differentiate abort errors from other errors
+ */
+class AbortError extends Error {}
+
+/**
+ * Object bundle that holds a task (a function) and metadata
+ * about the task, including number of attempts and any errors
+ * that have occurred.
+ */
 interface QueuedTask {
   task: TaskType;
   attempts: number;
   failures: TaskQueueErrorEvent[];
+}
+
+/**
+ * A helper class to run a task with an abort signal.
+ * This allows us to abort tasks that are currently running
+ * when the queue is stopped. The AbortSignal should come from
+ * the TaskQueue's AbortController.
+ */
+class TaskRunner {
+  constructor(
+    protected queuedTask: QueuedTask,
+    protected signal: AbortSignal,
+  ) {}
+
+  /**
+   * This function runs an async task. If it succeeds, it resolves.
+   * If it fails, it rejects. If the abort signal is triggered,
+   * it rejects with an AbortError.
+   */
+  run() {
+    return new Promise<void>(async (res, rej) => {
+      // We create a reference to the abort callback. This allows
+      // us to remove the event listener later.
+      const abortCallBack = () => {
+        rej(new AbortError('Task aborted'));
+      };
+      this.signal.addEventListener('abort', abortCallBack, { once: true });
+
+      try {
+        await this.queuedTask.task();
+        this.signal.removeEventListener('abort', abortCallBack);
+
+        // We aren't worried about resolving with a value because
+        // these tasks are just fire-and-forget.
+        res();
+      } catch (e) {
+        this.signal.removeEventListener('abort', abortCallBack);
+        rej(e);
+      }
+    });
+  }
+
+  /**
+   * Convenience static method to run a task as a one-liner.
+   */
+  static runTask(queuedTask: QueuedTask, signal: AbortSignal): Promise<void> {
+    const runner = new TaskRunner(queuedTask, signal);
+    return runner.run();
+  }
 }
 
 // TODOs:
@@ -87,18 +146,55 @@ interface QueuedTask {
  * as workers become available.
  */
 export class TaskQueue extends EventTarget {
-  private tasks: QueuedTask[] = [];
+  /**
+   * All queued tasks that have not yet started. When tasks get
+   * started, they are removed from this array.
+   */
+  protected tasks: QueuedTask[] = [];
 
-  private totalUniqueTasksAdded: number = 0;
+  /**
+   * Total unique tasks that have been added to the queue. This
+   * counter allows us to track the total number of tasks because
+   * tasks gets emptied as tasks are run.
+   */
+  protected totalUniqueTasksAdded: number = 0;
 
-  private _completeTasks: QueuedTask[] = [];
-  private _failedTasks: { task: QueuedTask; error: unknown }[] = [];
-  private _totalWorkers: number = 30;
+  /**
+   * List of Completed tasks that have successfully run.
+   */
+  protected _completeTasks: QueuedTask[] = [];
 
-  private workers: Record<string, QueuedTask | null> = {};
-  private retries: number = 0;
+  /**
+   * Failed tasks. This number can be greater than the total number
+   * of unique tasks if retries are used. A task can fail multiple times.
+   */
+  protected _failedTasks: { task: QueuedTask; error: unknown }[] = [];
 
-  private continueRunning = true;
+  /**
+   * Total number of workers that can run concurrently. Default is 30.
+   * Must be > 0. This number should be tuned to fit the environment
+   * and the type of tasks being run.
+   */
+  protected _totalWorkers: number = 30;
+
+  /**
+   * The workers and the task they are currently running. If a
+   * worker is idle, the value is null.
+   */
+  protected workers: Record<string, QueuedTask | null> = {};
+
+  /**
+   * The number of retries a single task can attempt before being marked
+   * as failed. Default is 0 (no retries).
+   */
+  protected retries: number = 0;
+
+  /**
+   * Abort controller created by the TaskQueue to abort running
+   * tasks. An AbortSignal from this controller is passed to each
+   * task when it is run.
+   */
+  protected abortController = new AbortController();
 
   constructor(args: TaskQueueConstructorInput) {
     super();
@@ -140,7 +236,10 @@ export class TaskQueue extends EventTarget {
     return this.totalUniqueTasksAdded;
   }
 
-  private addTask(task: TaskType): void {
+  /**
+   * Adds a single task to the queue.
+   */
+  protected addTask(task: TaskType): void {
     this.totalUniqueTasksAdded += 1;
     this.tasks.push({ task, attempts: 0, failures: [] });
   }
@@ -158,16 +257,86 @@ export class TaskQueue extends EventTarget {
   }
 
   /**
+   * Slice off the next task in the queue
+   */
+  protected getNextTask(): QueuedTask | undefined {
+    return this.tasks.shift();
+  }
+
+  /**
+   * Runs the task on the specified worker index.
+   * On completion, attempts to get the next task and run it.
+   * If no next task, marks the worker as idle. Waits until all workers are idle
+   * to dispatch the 'all_workers_idle' event.
+   */
+  protected async runTask(index: string | number): Promise<void> {
+    // Get the next task
+    const queuedTask = this.getNextTask();
+
+    if (!queuedTask) {
+      // No task to run, the array must be empty. If the workers
+      // are all idle, send the all done event
+      if (this.allWorkersIdle()) {
+        this.sendAllDone();
+      }
+
+      return;
+    }
+
+    this.workers[index] = queuedTask;
+
+    try {
+      queuedTask.attempts += 1;
+      // Start Task
+      await TaskRunner.runTask(queuedTask, this.abortController.signal);
+
+      this._completeTasks.push(queuedTask);
+
+      // On Completion, dispatch a completed event
+      this.dispatchEvent(new TaskCompletedEvent());
+    } catch (e) {
+      if (e instanceof AbortError) {
+        // Task was aborted, we need to set this worker
+        // as idle and check for all done
+        this.setWorkerFinished(index);
+
+        if (this.allWorkersIdle()) {
+          this.sendAllDone();
+        }
+
+        return;
+      }
+      // TODO pass the error object with the event
+
+      queuedTask.failures.push(new TaskQueueErrorEvent(e));
+      this._failedTasks.push({ task: queuedTask, error: e });
+      this.dispatchEvent(new TaskQueueErrorEvent(e));
+
+      if (this.retries && queuedTask.attempts <= this.retries) {
+        this.tasks.push(queuedTask);
+      }
+    }
+
+    // Mark worker as free
+    this.setWorkerFinished(index);
+
+    // Start over
+    this.runTask(index);
+  }
+
+  /**
+   * Marks the worker as finished by setting its task to null.
+   */
+  protected setWorkerFinished(index: string | number) {
+    this.workers[index] = null;
+  }
+
+  /**
    * Starts executing tasks in the queue. Resolves when all tasks are complete.
    */
   startExecution(): void {
-    this.continueRunning = true;
-
     for (const workerId of Object.keys(this.workers)) {
-      const task = this.getNextTask();
-      if (task) {
-        this.runTask(workerId, task);
-      }
+      this.runTask(workerId);
     }
 
     if (this.allWorkersIdle()) {
@@ -175,8 +344,14 @@ export class TaskQueue extends EventTarget {
     }
   }
 
-  private eventListeners: Record<string, EventListenerOrEventListenerObject[]> =
-    {};
+  /**
+   * All event listeners get added to this object so that when
+   * we want to remove them all, we have references to them.
+   */
+  protected eventListeners: Record<
+    string,
+    EventListenerOrEventListenerObject[]
+  > = {};
 
   addEventListener(
     type: string,
@@ -192,7 +367,10 @@ export class TaskQueue extends EventTarget {
     }
   }
 
-  clearEventListeners() {
+  /**
+   * Removes all event listeners added to the TaskQueue instance.
+   */
+  clearAllEventListeners() {
     for (const [type, listeners] of Object.entries(this.eventListeners)) {
       for (const listener of listeners) {
         super.removeEventListener(type, listener);
@@ -207,9 +385,13 @@ export class TaskQueue extends EventTarget {
    * currently running tasks.
    */
   stop(): void {
-    this.continueRunning = false;
+    this.abortController.abort();
   }
 
+  /**
+   * Clears all pending tasks in the queue. Will throw an error
+   * if tasks are currently running.
+   */
   clearQueue() {
     if (!this.allWorkersIdle()) {
       throw new Error('Cannot clear the queue while tasks are running');
@@ -221,73 +403,10 @@ export class TaskQueue extends EventTarget {
   }
 
   /**
-   * Slice off the next task in the queue
+   * Sends a TaskQueueCompletedEvent, which is an all done event
+   * with metrics about the run.
    */
-  private getNextTask(): QueuedTask | undefined {
-    return this.tasks.shift();
-  }
-
-  /**
-   * Runs the task on the specified worker index.
-   * On completion, attempts to get the next task and run it.
-   * If no next task, marks the worker as idle. Waits until all workers are idle
-   * to dispatch the 'all_workers_idle' event.
-   */
-  private async runTask(
-    index: string | number,
-    queuedTask: QueuedTask,
-  ): Promise<void> {
-    this.workers[index] = queuedTask;
-
-    try {
-      queuedTask.attempts += 1;
-      // Start Task
-      await queuedTask.task();
-
-      this._completeTasks.push(queuedTask);
-
-      // On Completion, dispatch a completed event
-      this.dispatchEvent(new TaskCompletedEvent());
-    } catch (e) {
-      // TODO pass the error object with the event
-
-      queuedTask.failures.push(new TaskQueueErrorEvent(e));
-      this._failedTasks.push({ task: queuedTask, error: e });
-      this.dispatchEvent(new TaskQueueErrorEvent(e));
-
-      if (this.retries && queuedTask.attempts <= this.retries) {
-        this.tasks.push(queuedTask);
-      }
-    }
-
-    // Mark worker as free
-    this.workers[index] = null;
-
-    if (!this.continueRunning) {
-      if (this.allWorkersIdle()) {
-        this.sendAllDone();
-      }
-      // If we are not continuing, we're going to stop here
-      return;
-    }
-
-    // Get the next task
-    const nextTask = this.getNextTask();
-
-    // If there is a next task, run it
-    if (nextTask) {
-      this.runTask(index, nextTask);
-    } else {
-      // If no next task, check if all workers are idle
-      if (this.allWorkersIdle()) {
-        // TODO add metrics to the event
-        this.sendAllDone();
-      }
-      // Otherwise, do nothing and wait for other workers to finish
-    }
-  }
-
-  private sendAllDone() {
+  protected sendAllDone() {
     this.dispatchEvent(
       new TaskQueueCompletedEvent({
         successfulTasks: this._completeTasks.length,
@@ -297,7 +416,11 @@ export class TaskQueue extends EventTarget {
     );
   }
 
-  private allWorkersIdle(): boolean {
+  /**
+   * Checks whether all workers are idle (not running a task).
+   * It uses the workers object to determine this.
+   */
+  protected allWorkersIdle(): boolean {
     return Object.values(this.workers).every(isUndefinedOrNull);
   }
 
