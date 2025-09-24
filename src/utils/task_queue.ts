@@ -382,7 +382,9 @@ export class TaskQueue extends EventTarget {
   /**
    * Stops the queue after the currently running tasks complete.
    * Most Promises cannot be cancelled, so this will not stop
-   * currently running tasks.
+   * functions that are currently running. However, it will
+   * immediately reject all promises currently running with an
+   * AbortError.
    */
   stop(): void {
     this.abortController.abort();
@@ -430,7 +432,7 @@ export class TaskQueue extends EventTarget {
 }
 
 export interface RunTaskQueueArgs extends TaskQueueConstructorInput {
-  onSuccess?: () => void | Promise<void>;
+  onSuccess?: (ev: TaskQueueCompletedEvent) => void | Promise<void>;
   onTaskError?: (error: unknown) => void | Promise<void>;
   onTaskCompleted?: () => void | Promise<void>;
 }
@@ -445,10 +447,19 @@ export async function runTaskQueue(args: RunTaskQueueArgs) {
     tasks: args.tasks,
   });
 
-  return new Promise<void>((res) => {
-    taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE, () => {
-      args?.onSuccess?.();
-      res();
+  return new Promise<TaskQueueCompletedEvent>((res) => {
+    taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE, (ev) => {
+      const evToSend =
+        ev instanceof TaskQueueCompletedEvent
+          ? ev
+          : new TaskQueueCompletedEvent({
+              successfulTasks: taskQueue.completedTasks,
+              failedTasks: taskQueue.failedTasks,
+              totalTasks: taskQueue.totalTasks,
+            });
+      args?.onSuccess?.(evToSend);
+
+      res(evToSend);
     });
     taskQueue.addEventListener(TaskQueue.TASK_COMPLETED, () => {
       args?.onTaskCompleted?.();
