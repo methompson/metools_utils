@@ -14,7 +14,7 @@ src
 # Config files
 .prettierrc
 eslint.config.mjs
-jest.config.js
+vitest.config.js
 tsconfig.json
 tsup.config.ts
 publish.sh
