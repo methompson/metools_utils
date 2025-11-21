@@ -17,4 +17,6 @@ eslint.config.mjs
 vitest.config.js
 tsconfig.json
 tsup.config.ts
+
+# Scripts
 publish.sh
