@@ -124,21 +124,11 @@ class TaskRunner {
   }
 }
 
-// TODOs:
-// - Add getters that return metrics about the queue
-//   - Total tasks
-//   - Successful tasks
-//   - Failed tasks
-//   - Pending tasks
-//   - Active tasks
-//   - Idle workers
-//   - Currently running tasks
-// - Add ability to pause the queue
-// - Add ability to stop the queue
-// - Add a timeout to tasks
-// - Add retries
-// - Add retry delay
-// - Provide a way to force retry a failed task from the TASK_ERROR event
+export interface RunTaskQueueArgs extends TaskQueueConstructorInput {
+  onSuccess?: (ev: TaskQueueCompletedEvent) => void | Promise<void>;
+  onTaskError?: (error: unknown) => void | Promise<void>;
+  onTaskCompleted?: () => void | Promise<void>;
+}
 
 /**
  * A task queue to manage and execute asynchronous tasks in sequence.
@@ -155,7 +145,7 @@ export class TaskQueue extends EventTarget {
   /**
    * Total unique tasks that have been added to the queue. This
    * counter allows us to track the total number of tasks because
-   * tasks gets emptied as tasks are run.
+   * tasks get emptied as tasks are run.
    */
   protected totalUniqueTasksAdded: number = 0;
 
@@ -220,20 +210,50 @@ export class TaskQueue extends EventTarget {
     }
   }
 
+  /**
+   * The number of tasks that are currently pending (i.e., not yet started).
+   */
   get pendingTasks(): number {
     return this.tasks.length;
   }
+  /**
+   * The number of tasks that have been completed successfully.
+   */
   get completedTasks(): number {
     return this._completeTasks.length;
   }
+  /**
+   * The number of tasks that have failed.
+   */
   get failedTasks(): number {
     return this._failedTasks.length;
   }
+  /**
+   * The total number of workers in the queue.
+   */
   get totalWorkers(): number {
     return this._totalWorkers;
   }
+  /**
+   * The total number of unique tasks that have been added to the queue.
+   */
   get totalTasks(): number {
     return this.totalUniqueTasksAdded;
+  }
+
+  /**
+   * The number of active tasks currently running.
+   */
+  get activeTasks(): number {
+    return Object.values(this.workers).filter((el) => !isUndefinedOrNull(el))
+      .length;
+  }
+
+  /**
+   * The number of idle workers.
+   */
+  get idleWorkers(): number {
+    return Object.values(this.workers).length - this.activeTasks;
   }
 
   /**
@@ -334,13 +354,43 @@ export class TaskQueue extends EventTarget {
   /**
    * Starts executing tasks in the queue. Resolves when all tasks are complete.
    */
-  startExecution(): void {
+  startExecution(args?: RunTaskQueueArgs): void {
     for (const workerId of Object.keys(this.workers)) {
       this.runTask(workerId);
     }
 
     if (this.allWorkersIdle()) {
       this.sendAllDone();
+    }
+
+    const { onSuccess, onTaskCompleted, onTaskError } = args ?? {};
+
+    if (onSuccess) {
+      this.addEventListener(TaskQueue.ALL_WORKERS_IDLE, (ev) => {
+        const evToSend =
+          ev instanceof TaskQueueCompletedEvent
+            ? ev
+            : new TaskQueueCompletedEvent({
+                successfulTasks: this.completedTasks,
+                failedTasks: this.failedTasks,
+                totalTasks: this.totalTasks,
+              });
+        onSuccess(evToSend);
+      });
+    }
+
+    if (onTaskCompleted) {
+      this.addEventListener(TaskQueue.TASK_COMPLETED, () => {
+        onTaskCompleted();
+      });
+    }
+
+    if (onTaskError) {
+      this.addEventListener(TaskQueue.TASK_ERROR, (ev) => {
+        if (ev instanceof TaskQueueErrorEvent) {
+          onTaskError(ev.error);
+        }
+      });
     }
   }
 
@@ -429,44 +479,4 @@ export class TaskQueue extends EventTarget {
   static ALL_WORKERS_IDLE = ALL_WORKERS_IDLE_EVENT;
   static TASK_ERROR = TASK_ERROR_EVENT;
   static TASK_COMPLETED = TASK_COMPLETED_EVENT;
-}
-
-export interface RunTaskQueueArgs extends TaskQueueConstructorInput {
-  onSuccess?: (ev: TaskQueueCompletedEvent) => void | Promise<void>;
-  onTaskError?: (error: unknown) => void | Promise<void>;
-  onTaskCompleted?: () => void | Promise<void>;
-}
-
-/**
- * Convenience function to run a task queue without needing to
- * set up all of the event listeners manually.
- */
-export async function runTaskQueue(args: RunTaskQueueArgs) {
-  const taskQueue = new TaskQueue({
-    totalWorkers: args.totalWorkers ?? 30,
-    tasks: args.tasks,
-  });
-
-  return new Promise<TaskQueueCompletedEvent>((res) => {
-    taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE, (ev) => {
-      const evToSend =
-        ev instanceof TaskQueueCompletedEvent
-          ? ev
-          : new TaskQueueCompletedEvent({
-              successfulTasks: taskQueue.completedTasks,
-              failedTasks: taskQueue.failedTasks,
-              totalTasks: taskQueue.totalTasks,
-            });
-      args?.onSuccess?.(evToSend);
-
-      res(evToSend);
-    });
-    taskQueue.addEventListener(TaskQueue.TASK_COMPLETED, () => {
-      args?.onTaskCompleted?.();
-    });
-    taskQueue.addEventListener(TaskQueue.TASK_ERROR, (ev) => {
-      args?.onTaskError?.(ev);
-    });
-    taskQueue.startExecution();
-  });
 }
