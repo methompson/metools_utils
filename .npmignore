@@ -20,3 +20,4 @@ tsup.config.ts
 
 # Scripts
 publish.sh
+vitest.config.ts
