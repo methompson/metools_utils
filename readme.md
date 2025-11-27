@@ -197,7 +197,7 @@ const arr = [1, 'two', 3, 'four', 5, true, null, {}, []];
 
 // pass should be [1, 3, 5]
 // fail should be ['two', 'four', true, null, {}, []]
-const [pass, fail] = split(arr, (el) => typeof el === 'string');
+const [pass, fail] = split(arr, (el) => typeof el === 'number');
 ```
 
 ## TaskQueue
