@@ -454,6 +454,22 @@ export class TaskQueue extends EventTarget {
     this._failedTasks = [];
   }
 
+  async waitForIdle(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const finished = () => {
+        resolve();
+        this.removeEventListener(TaskQueue.ALL_WORKERS_IDLE, finished);
+      };
+      const err = () => {
+        this.removeEventListener(TaskQueue.TASK_ERROR, err);
+        reject();
+      };
+
+      this.addEventListener(TaskQueue.ALL_WORKERS_IDLE, finished);
+      this.addEventListener(TaskQueue.TASK_ERROR, err);
+    });
+  }
+
   /**
    * Sends a TaskQueueCompletedEvent, which is an all done event
    * with metrics about the run.

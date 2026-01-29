@@ -957,4 +957,22 @@ describe('TaskQueue', () => {
     expect(callback).toHaveBeenCalledTimes(20);
     expect(fn).toHaveBeenCalledTimes(20);
   });
+
+  describe('waitForIdle', () => {
+    test('resolves when all tasks are complete', async () => {
+      const fn = vi.fn(async () => wait(1));
+      const severalTasks = Array.from({ length: 20 }, () => fn);
+
+      const taskQueue = new TaskQueue({
+        totalWorkers: 5,
+        tasks: severalTasks,
+      });
+
+      taskQueue.startExecution();
+
+      await taskQueue.waitForIdle();
+
+      expect(fn).toHaveBeenCalledTimes(20);
+    });
+  });
 });
