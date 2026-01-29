@@ -36,7 +36,7 @@ describe('TaskQueue', () => {
 
         await new Promise<void>((res, rej) => {
           taskQueue.startExecution({
-            onSuccess: () => res(),
+            onWorkersIdle: () => res(),
             onTaskCompleted() {
               try {
                 i++;
@@ -66,7 +66,7 @@ describe('TaskQueue', () => {
 
         await new Promise<void>((res, rej) => {
           taskQueue.startExecution({
-            onSuccess: () => res(),
+            onWorkersIdle: () => res(),
             onTaskCompleted() {
               try {
                 i++;
@@ -96,7 +96,7 @@ describe('TaskQueue', () => {
 
         await new Promise<void>((res) => {
           taskQueue.startExecution({
-            onSuccess: () => res(),
+            onWorkersIdle: () => res(),
           });
         });
 
@@ -130,7 +130,7 @@ describe('TaskQueue', () => {
 
         await new Promise<void>((res) => {
           taskQueue.startExecution({
-            onSuccess: () => res(),
+            onWorkersIdle: () => res(),
           });
         });
 
@@ -151,7 +151,7 @@ describe('TaskQueue', () => {
 
         await new Promise<void>((res, rej) => {
           taskQueue.startExecution({
-            onSuccess: () => res(),
+            onWorkersIdle: () => res(),
             onTaskCompleted() {
               try {
                 i++;
@@ -180,7 +180,7 @@ describe('TaskQueue', () => {
 
         await new Promise<void>((res, rej) => {
           taskQueue.startExecution({
-            onSuccess: () => res(),
+            onWorkersIdle: () => res(),
             onTaskCompleted() {
               try {
                 i++;
@@ -212,7 +212,7 @@ describe('TaskQueue', () => {
 
         await new Promise<void>((res) => {
           taskQueue.startExecution({
-            onSuccess: () => res(),
+            onWorkersIdle: () => res(),
           });
         });
 
@@ -246,7 +246,7 @@ describe('TaskQueue', () => {
 
         await new Promise<void>((res) => {
           taskQueue.startExecution({
-            onSuccess: () => res(),
+            onWorkersIdle: () => res(),
           });
         });
 
@@ -272,7 +272,7 @@ describe('TaskQueue', () => {
 
         await new Promise<void>((res) => {
           taskQueue.startExecution({
-            onSuccess: () => res(),
+            onWorkersIdle: () => res(),
           });
         });
 
@@ -359,7 +359,7 @@ describe('TaskQueue', () => {
         let i = 0;
         await new Promise<void>((res, rej) => {
           taskQueue.startExecution({
-            onSuccess: () => res(),
+            onWorkersIdle: () => res(),
             onTaskCompleted() {
               try {
                 i++;
@@ -390,7 +390,7 @@ describe('TaskQueue', () => {
 
         await new Promise<void>((res) => {
           taskQueue.startExecution({
-            onSuccess: () => res(),
+            onWorkersIdle: () => res(),
           });
         });
 
@@ -424,7 +424,7 @@ describe('TaskQueue', () => {
         await new Promise<void>((res, rej) => {
           try {
             taskQueue.startExecution({
-              onSuccess: () => res(),
+              onWorkersIdle: () => res(),
             });
             expect(taskQueue.idleWorkers).toBe(0);
           } catch {
@@ -446,7 +446,7 @@ describe('TaskQueue', () => {
         await new Promise<void>((res, rej) => {
           try {
             taskQueue.startExecution({
-              onSuccess: () => res(),
+              onWorkersIdle: () => res(),
             });
           } catch {
             rej();
@@ -832,6 +832,37 @@ describe('TaskQueue', () => {
     expect(fn).toHaveBeenCalledTimes(20);
   });
 
+  test('Removes callbacks set on startExecution when restarted', async () => {
+    const fn = vi.fn(async () => wait(1));
+    const severalTasks = Array.from({ length: 20 }, () => fn);
+
+    const taskQueue = new TaskQueue({
+      totalWorkers: 30,
+      tasks: severalTasks,
+    });
+
+    const callback = vi.fn();
+    taskQueue.startExecution({
+      onWorkersIdle: () => {
+        callback();
+      },
+    });
+
+    await taskQueue.waitForIdle();
+
+    const fn2 = vi.fn(async () => wait(1));
+    const moreTasks = Array.from({ length: 20 }, () => fn2);
+    taskQueue.addTasks(moreTasks);
+
+    taskQueue.startExecution();
+
+    await taskQueue.waitForIdle();
+
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect(fn).toHaveBeenCalledTimes(20);
+    expect(fn2).toHaveBeenCalledTimes(20);
+  });
+
   test('the queue can be cleared', async () => {
     const fn = vi.fn(async () => wait(1));
     const severalTasks = Array.from({ length: 20 }, () => fn);
@@ -883,7 +914,7 @@ describe('TaskQueue', () => {
     const callBack = vi.fn();
     await new Promise<void>((res) => {
       taskQueue.startExecution({
-        onSuccess() {
+        onWorkersIdle() {
           callBack();
           res();
         },
@@ -920,7 +951,7 @@ describe('TaskQueue', () => {
     const callback = vi.fn();
     await new Promise<void>((res) => {
       taskQueue.startExecution({
-        onSuccess() {
+        onWorkersIdle() {
           res();
         },
         onTaskError() {
@@ -945,7 +976,7 @@ describe('TaskQueue', () => {
     const callback = vi.fn();
     await new Promise<void>((res) => {
       taskQueue.startExecution({
-        onSuccess() {
+        onWorkersIdle() {
           res();
         },
         onTaskCompleted() {
@@ -956,6 +987,52 @@ describe('TaskQueue', () => {
 
     expect(callback).toHaveBeenCalledTimes(20);
     expect(fn).toHaveBeenCalledTimes(20);
+  });
+
+  test('Does nothing extra if startExecution is called while running', async () => {
+    const fn = vi.fn(async () => wait(1));
+    const severalTasks = Array.from({ length: 20 }, () => fn);
+
+    const taskQueue = new TaskQueue({
+      totalWorkers: 2,
+      tasks: severalTasks,
+    });
+
+    taskQueue.startExecution();
+    await wait(3);
+
+    expect(taskQueue.completedTasks).toBeGreaterThan(0);
+
+    taskQueue.startExecution();
+
+    await taskQueue.waitForIdle();
+
+    expect(fn).toHaveBeenCalledTimes(20);
+  });
+
+  test('Callbacks can be added later', async () => {
+    const fn = vi.fn(async () => wait(1));
+    const severalTasks = Array.from({ length: 20 }, () => fn);
+
+    const taskQueue = new TaskQueue({
+      totalWorkers: 2,
+      tasks: severalTasks,
+    });
+
+    taskQueue.startExecution();
+    await wait(3);
+
+    expect(taskQueue.completedTasks).toBeGreaterThan(0);
+
+    const complete = vi.fn();
+    taskQueue.startExecution({
+      onWorkersIdle: () => complete(),
+    });
+
+    await taskQueue.waitForIdle();
+
+    expect(fn).toHaveBeenCalledTimes(20);
+    expect(complete).toHaveBeenCalledTimes(1);
   });
 
   describe('waitForIdle', () => {
@@ -973,6 +1050,43 @@ describe('TaskQueue', () => {
       await taskQueue.waitForIdle();
 
       expect(fn).toHaveBeenCalledTimes(20);
+    });
+
+    test('resolves immediately if the queue is already idle', async () => {
+      const fn = vi.fn(async () => wait(1));
+      const severalTasks = Array.from({ length: 20 }, () => fn);
+
+      const taskQueue = new TaskQueue({
+        totalWorkers: 5,
+        tasks: severalTasks,
+      });
+
+      await taskQueue.waitForIdle();
+
+      expect(fn).toHaveBeenCalledTimes(0);
+    });
+
+    test('does not throw if any task fails', async () => {
+      const errFn = vi.fn(async () => {
+        throw new Error('Task failed');
+      });
+      const fn = vi.fn(async () => wait(1));
+      const severalTasks = [];
+      severalTasks.push(...Array.from({ length: 10 }, () => fn));
+      severalTasks.push(errFn);
+      severalTasks.push(...Array.from({ length: 10 }, () => fn));
+
+      const taskQueue = new TaskQueue({
+        totalWorkers: 5,
+        tasks: severalTasks,
+      });
+
+      taskQueue.startExecution();
+
+      await taskQueue.waitForIdle();
+
+      expect(fn).toHaveBeenCalled();
+      expect(errFn).toHaveBeenCalledTimes(1);
     });
   });
 });

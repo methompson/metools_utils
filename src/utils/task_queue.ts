@@ -12,7 +12,7 @@ export interface TaskQueueConstructorInput {
 
 const ALL_WORKERS_IDLE_EVENT = 'all_workers_idle';
 const TASK_ERROR_EVENT = 'task_error';
-const TASK_COMPLETED_EVENT = 'TaskCompletedEvent';
+const TASK_COMPLETED_EVENT = 'task_completed_event';
 
 export class TaskQueueErrorEvent extends Event {
   protected _error: unknown;
@@ -125,7 +125,7 @@ class TaskRunner {
 }
 
 export interface RunTaskQueueArgs extends TaskQueueConstructorInput {
-  onSuccess?: (ev: TaskQueueCompletedEvent) => void | Promise<void>;
+  onWorkersIdle?: (ev: TaskQueueCompletedEvent) => void | Promise<void>;
   onTaskError?: (error: unknown) => void | Promise<void>;
   onTaskCompleted?: () => void | Promise<void>;
 }
@@ -256,6 +256,14 @@ export class TaskQueue extends EventTarget {
     return Object.values(this.workers).length - this.activeTasks;
   }
 
+  protected get taskQueueCompletedEvent(): TaskQueueCompletedEvent {
+    return new TaskQueueCompletedEvent({
+      successfulTasks: this.completedTasks,
+      failedTasks: this.failedTasks,
+      totalTasks: this.totalTasks,
+    });
+  }
+
   /**
    * Adds a single task to the queue.
    */
@@ -363,34 +371,56 @@ export class TaskQueue extends EventTarget {
       this.sendAllDone();
     }
 
-    const { onSuccess, onTaskCompleted, onTaskError } = args ?? {};
+    const { onWorkersIdle, onTaskCompleted, onTaskError } = args ?? {};
 
-    if (onSuccess) {
-      this.addEventListener(TaskQueue.ALL_WORKERS_IDLE, (ev) => {
+    let idleCb: undefined | ((ev: Event) => void) = undefined;
+    let taskCompletedCb: undefined | (() => void) = undefined;
+    let taskErrorCb: undefined | ((err: unknown) => void) = undefined;
+
+    if (onWorkersIdle) {
+      const cb = (ev: Event) => {
         const evToSend =
           ev instanceof TaskQueueCompletedEvent
             ? ev
-            : new TaskQueueCompletedEvent({
-                successfulTasks: this.completedTasks,
-                failedTasks: this.failedTasks,
-                totalTasks: this.totalTasks,
-              });
-        onSuccess(evToSend);
-      });
+            : this.taskQueueCompletedEvent;
+        onWorkersIdle(evToSend);
+        this.removeEventListener(TaskQueue.ALL_WORKERS_IDLE, cb);
+      };
+      this.addEventListener(TaskQueue.ALL_WORKERS_IDLE, cb);
+      idleCb = cb;
     }
 
     if (onTaskCompleted) {
-      this.addEventListener(TaskQueue.TASK_COMPLETED, () => {
+      const cb = () => {
         onTaskCompleted();
-      });
+      };
+      this.addEventListener(TaskQueue.TASK_COMPLETED, cb);
+      taskCompletedCb = cb;
     }
 
     if (onTaskError) {
-      this.addEventListener(TaskQueue.TASK_ERROR, (ev) => {
+      const cb = (ev: unknown) => {
         if (ev instanceof TaskQueueErrorEvent) {
           onTaskError(ev.error);
         }
-      });
+      };
+      this.addEventListener(TaskQueue.TASK_ERROR, cb);
+      taskErrorCb = cb;
+    }
+
+    if (idleCb || taskCompletedCb || taskErrorCb) {
+      const cleanup = () => {
+        if (idleCb)
+          this.removeEventListener(TaskQueue.ALL_WORKERS_IDLE, idleCb);
+        if (taskCompletedCb)
+          this.removeEventListener(TaskQueue.TASK_COMPLETED, taskCompletedCb);
+        if (taskErrorCb)
+          this.removeEventListener(TaskQueue.TASK_ERROR, taskErrorCb);
+
+        this.removeEventListener(TaskQueue.ALL_WORKERS_IDLE, cleanup);
+      };
+
+      this.addEventListener(TaskQueue.ALL_WORKERS_IDLE, cleanup);
     }
   }
 
@@ -454,19 +484,18 @@ export class TaskQueue extends EventTarget {
     this._failedTasks = [];
   }
 
-  async waitForIdle(): Promise<void> {
-    return new Promise((resolve, reject) => {
+  async waitForIdle(): Promise<TaskQueueCompletedEvent> {
+    if (this.allWorkersIdle()) {
+      return this.taskQueueCompletedEvent;
+    }
+
+    return new Promise((resolve) => {
       const finished = () => {
-        resolve();
+        resolve(this.taskQueueCompletedEvent);
         this.removeEventListener(TaskQueue.ALL_WORKERS_IDLE, finished);
-      };
-      const err = () => {
-        this.removeEventListener(TaskQueue.TASK_ERROR, err);
-        reject();
       };
 
       this.addEventListener(TaskQueue.ALL_WORKERS_IDLE, finished);
-      this.addEventListener(TaskQueue.TASK_ERROR, err);
     });
   }
 
@@ -475,13 +504,7 @@ export class TaskQueue extends EventTarget {
    * with metrics about the run.
    */
   protected sendAllDone() {
-    this.dispatchEvent(
-      new TaskQueueCompletedEvent({
-        successfulTasks: this._completeTasks.length,
-        failedTasks: this._failedTasks.length,
-        totalTasks: this.totalUniqueTasksAdded,
-      }),
-    );
+    this.dispatchEvent(this.taskQueueCompletedEvent);
   }
 
   /**
