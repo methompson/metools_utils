@@ -14,7 +14,11 @@ src
 # Config files
 .prettierrc
 eslint.config.mjs
-jest.config.js
+vitest.config.js
 tsconfig.json
 tsup.config.ts
+
+# Scripts
 publish.sh
+vitest.config.ts
+metools-utils*.tgz

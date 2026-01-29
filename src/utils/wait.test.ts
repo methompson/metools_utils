@@ -2,10 +2,11 @@ import { wait } from './wait';
 
 describe('wait Utility', () => {
   test('waits for the specified time', async () => {
+    const timeWaited = 10;
     const start = performance.now();
-    await wait(50);
+    await wait(timeWaited);
     const end = performance.now();
-    expect(end - start).toBeGreaterThanOrEqual(50);
+    expect(end - start).toBeGreaterThanOrEqual(timeWaited);
   });
 
   test('waits for an extended period of time', async () => {
