@@ -19,6 +19,11 @@ export function arrayToObject<T>(
 }
 
 /**
+ * Alias for arrayToObject.
+ */
+export const arrayToMap = arrayToObject;
+
+/**
  * Converts an array of values into an object with common values
  * grouped together in an array. The keygen determines the key of the object for
  * each value. The purpose of this function is to group values with similar
@@ -62,6 +67,11 @@ export function mappedArrayToObject<T, U>(
 
   return output;
 }
+
+/**
+ * Alias for mappedArrayToObject.
+ */
+export const arrayToMapWithValue = mappedArrayToObject;
 
 /**
  * mappedArrayToGroup does the same things as mappedArrayToObject, but also combines

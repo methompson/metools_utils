@@ -1,7 +1,9 @@
 export {
   arrayToObject,
+  arrayToMap,
   arrayToGroup,
   mappedArrayToObject,
+  arrayToMapWithValue,
   mappedArrayToGroup,
 } from './utils/array_to_object';
 
