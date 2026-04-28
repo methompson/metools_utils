@@ -291,11 +291,11 @@ export class TaskQueue extends EventTarget {
 
     return await new Promise((resolve) => {
       const resolver = () => {
-        this.removeEventListener(TaskQueue.ALL_WORKERS_IDLE_EVENT, resolver);
+        this.removeEventListener(TaskQueue.ALL_WORKERS_IDLE, resolver);
         resolve(this.taskQueueCompletedEvent);
       };
 
-      this.addEventListener(TaskQueue.ALL_WORKERS_IDLE_EVENT, resolver);
+      this.addEventListener(TaskQueue.ALL_WORKERS_IDLE, resolver);
     });
   }
 
@@ -319,13 +319,13 @@ export class TaskQueue extends EventTarget {
     this.dispatchEvent(errorEvent);
   }
 
-  static get ALL_WORKERS_IDLE_EVENT(): string {
+  static get ALL_WORKERS_IDLE(): string {
     return ALL_WORKERS_IDLE_EVENT;
   }
-  static get TASK_ERROR_EVENT(): string {
+  static get TASK_ERROR(): string {
     return TASK_ERROR_EVENT;
   }
-  static get TASK_COMPLETED_EVENT(): string {
+  static get TASK_COMPLETED(): string {
     return TASK_COMPLETED_EVENT;
   }
 }

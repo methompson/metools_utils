@@ -12,7 +12,7 @@ describe('TaskQueue', () => {
       taskQueue.addTask(severalTasks);
 
       await new Promise((resolve) => {
-        taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE_EVENT, () => {
+        taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE, () => {
           expect(fn).toHaveBeenCalledTimes(20);
           resolve(null);
         });
@@ -31,7 +31,7 @@ describe('TaskQueue', () => {
 
       const start = performance.now();
       await new Promise((resolve) => {
-        taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE_EVENT, () => {
+        taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE, () => {
           expect(fn).toHaveBeenCalledTimes(20);
           resolve(null);
         });
@@ -72,7 +72,7 @@ describe('TaskQueue', () => {
         const errHandler = vi.fn((ev) => {
           expect(ev.toString()).toBe(`TaskQueueErrorEvent: ${err}`);
         });
-        taskQueue.addEventListener(TaskQueue.TASK_ERROR_EVENT, errHandler);
+        taskQueue.addEventListener(TaskQueue.TASK_ERROR, errHandler);
 
         taskQueue.addTask(fn);
 
