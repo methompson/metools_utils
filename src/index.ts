@@ -11,13 +11,6 @@ export { toPlainObject, xyz } from './utils/to_plain_object';
 
 export { split } from './utils/split';
 
-export {
-  TaskQueue,
-  TaskQueueConstructorInput,
-  TaskQueueErrorEvent,
-  TaskCompletedEvent,
-  TaskQueueCompletedEvent,
-  RunTaskQueueArgs,
-} from './utils/task_queue';
+export { TaskQueue, Task } from './utils/task_queue';
 
 export { wait } from './utils/wait';

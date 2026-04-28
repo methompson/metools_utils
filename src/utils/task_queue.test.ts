@@ -1,1092 +1,470 @@
-import {
-  TaskQueue,
-  TaskQueueCompletedEvent,
-  TaskQueueErrorEvent,
-} from './task_queue';
+import { TaskQueue } from './task_queue';
 import { wait } from './wait';
 
 describe('TaskQueue', () => {
-  describe('getters', () => {
-    describe('pendingTasks', () => {
-      test('returns all tasks if the queue has not started', () => {
-        const fn = vi.fn(async () => wait(1));
-        const severalTasks = Array.from({ length: 20 }, () => fn);
+  describe('Running multiple tasks', () => {
+    test('should run all tasks and emit the completed event', async () => {
+      const fn = vi.fn();
+      const severalTasks = Array.from({ length: 20 }, () => fn);
 
-        const taskQueue = new TaskQueue({
-          totalWorkers: 30,
-          tasks: severalTasks,
-        });
+      const taskQueue = new TaskQueue({ totalWorkers: 5 });
 
-        expect(taskQueue.pendingTasks).toBe(20);
+      taskQueue.addTask(severalTasks);
 
-        expect(fn).not.toHaveBeenCalled();
-      });
-
-      test('returns remaining tasks if the queue is running', async () => {
-        expect.assertions(1);
-        const fn = vi.fn(() => wait(1));
-        const severalTasks = Array.from({ length: 20 }, () => fn);
-
-        const taskQueue = new TaskQueue({
-          totalWorkers: 1,
-          tasks: severalTasks,
-        });
-
-        let i = 0;
-
-        await new Promise<void>((res, rej) => {
-          taskQueue.startExecution({
-            onWorkersIdle: () => res(),
-            onTaskCompleted() {
-              try {
-                i++;
-
-                if (i === 10) {
-                  expect(taskQueue.pendingTasks).toBe(10);
-                }
-              } catch (_) {
-                rej();
-              }
-            },
-          });
+      await new Promise((resolve) => {
+        taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE_EVENT, () => {
+          expect(fn).toHaveBeenCalledTimes(20);
+          resolve(null);
         });
       });
 
-      test('pending tasks goes up if you add more tasks while running', async () => {
-        expect.assertions(2);
-        const fn = vi.fn(async () => wait(1));
-        const severalTasks = Array.from({ length: 20 }, () => fn);
-
-        const taskQueue = new TaskQueue({
-          totalWorkers: 1,
-          tasks: severalTasks,
-        });
-
-        let i = 0;
-
-        await new Promise<void>((res, rej) => {
-          taskQueue.startExecution({
-            onWorkersIdle: () => res(),
-            onTaskCompleted() {
-              try {
-                i++;
-                if (i === 10) {
-                  expect(taskQueue.pendingTasks).toBe(10);
-                  taskQueue.addTasks([fn]);
-                  expect(taskQueue.pendingTasks).toBe(11);
-                }
-              } catch (_) {
-                rej();
-              }
-            },
-          });
-        });
-      });
-
-      test('returns 0 if all tasks have completed', async () => {
-        const fn = vi.fn();
-        const severalTasks = Array.from({ length: 20 }, () => fn);
-
-        const taskQueue = new TaskQueue({
-          totalWorkers: 30,
-          tasks: severalTasks,
-        });
-
-        expect(taskQueue.pendingTasks).toBe(severalTasks.length);
-
-        await new Promise<void>((res) => {
-          taskQueue.startExecution({
-            onWorkersIdle: () => res(),
-          });
-        });
-
-        expect(taskQueue.pendingTasks).toBe(0);
-      });
+      expect(fn).toHaveBeenCalledTimes(20);
     });
 
-    describe('completedTasks', () => {
-      test('returns 0 if the queue has not started', () => {
-        const fn = vi.fn();
-        const severalTasks = Array.from({ length: 20 }, () => fn);
+    test('async events should run almost near parallel', async () => {
+      const fn = vi.fn(() => wait(20));
+      const severalTasks = Array.from({ length: 20 }, () => fn);
 
-        const taskQueue = new TaskQueue({
-          totalWorkers: 30,
-          tasks: severalTasks,
-        });
+      const taskQueue = new TaskQueue({ totalWorkers: 20 });
 
-        expect(taskQueue.completedTasks).toBe(0);
-      });
+      taskQueue.addTask(severalTasks);
 
-      test('returns 0 if no tasks have completed', async () => {
-        const fn = vi.fn(() => {
-          throw new Error('Not completed yet');
-        });
-        const severalTasks = Array.from({ length: 20 }, () => fn);
-
-        const taskQueue = new TaskQueue({
-          totalWorkers: 30,
-          tasks: severalTasks,
-        });
-
-        await new Promise<void>((res) => {
-          taskQueue.startExecution({
-            onWorkersIdle: () => res(),
-          });
-        });
-
-        expect(taskQueue.completedTasks).toBe(0);
-      });
-
-      test('returns the number of tasks that have completed', async () => {
-        expect.assertions(1);
-        const fn = vi.fn(async () => wait(1));
-        const severalTasks = Array.from({ length: 20 }, () => fn);
-
-        const taskQueue = new TaskQueue({
-          totalWorkers: 1,
-          tasks: severalTasks,
-        });
-
-        let i = 0;
-
-        await new Promise<void>((res, rej) => {
-          taskQueue.startExecution({
-            onWorkersIdle: () => res(),
-            onTaskCompleted() {
-              try {
-                i++;
-                if (i === 10) {
-                  expect(taskQueue.completedTasks).toBe(10);
-                }
-              } catch (_) {
-                rej();
-              }
-            },
-          });
+      const start = performance.now();
+      await new Promise((resolve) => {
+        taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE_EVENT, () => {
+          expect(fn).toHaveBeenCalledTimes(20);
+          resolve(null);
         });
       });
+      const end = performance.now();
 
-      test('completedTasks does not go up if you add a task', async () => {
-        expect.assertions(2);
-        const fn = vi.fn(async () => wait(1));
-        const severalTasks = Array.from({ length: 20 }, () => fn);
+      // 20 workers working at the same time, running 20 tasks that all take
+      // 20ms. Should take just a little more than 20ms, but not much more.
+      expect(end - start).toBeLessThan(22);
 
-        const taskQueue = new TaskQueue({
-          totalWorkers: 1,
-          tasks: severalTasks,
-        });
-
-        let i = 0;
-
-        await new Promise<void>((res, rej) => {
-          taskQueue.startExecution({
-            onWorkersIdle: () => res(),
-            onTaskCompleted() {
-              try {
-                i++;
-                if (i === 10) {
-                  expect(taskQueue.completedTasks).toBe(10);
-
-                  taskQueue.addTasks([fn]);
-
-                  expect(taskQueue.completedTasks).toBe(10);
-                }
-              } catch (_) {
-                rej();
-              }
-            },
-          });
-        });
-      });
-
-      test('returns the total number of tasks if all tasks have completed', async () => {
-        const fn = vi.fn();
-        const severalTasks = Array.from({ length: 20 }, () => fn);
-
-        const taskQueue = new TaskQueue({
-          totalWorkers: 20,
-          tasks: severalTasks,
-        });
-
-        expect(taskQueue.completedTasks).toBe(0);
-
-        await new Promise<void>((res) => {
-          taskQueue.startExecution({
-            onWorkersIdle: () => res(),
-          });
-        });
-
-        expect(taskQueue.completedTasks).toBe(severalTasks.length);
-      });
+      expect(fn).toHaveBeenCalledTimes(20);
     });
 
-    describe('failedTasks', () => {
-      test('returns 0 if the queue has not started', () => {
-        const fn = vi.fn();
-        const severalTasks = Array.from({ length: 20 }, () => fn);
+    test('sends an all done event even if all tasks fail', async () => {
+      const fn = vi.fn(() => Promise.reject(new Error('Task failed')));
+      const severalTasks = Array.from({ length: 20 }, () => fn);
 
-        const taskQueue = new TaskQueue({
-          totalWorkers: 20,
-          tasks: severalTasks,
-        });
+      const taskQueue = new TaskQueue({ totalWorkers: 5 });
 
-        expect(taskQueue.failedTasks).toBe(0);
-      });
+      taskQueue.addTask(severalTasks);
 
-      test('returns 0 if no tasks have failed', async () => {
-        const fn = vi.fn();
-        const severalTasks = Array.from({ length: 20 }, () => fn);
+      const result = await taskQueue.waitForIdle();
 
-        const taskQueue = new TaskQueue({
-          totalWorkers: 20,
-          tasks: severalTasks,
-        });
+      expect(fn).toHaveBeenCalledTimes(20);
+      expect(taskQueue.isIdle).toBe(true);
+      expect(taskQueue.pendingTasks).toBe(0);
 
-        expect(taskQueue.failedTasks).toBe(0);
-
-        await new Promise<void>((res) => {
-          taskQueue.startExecution({
-            onWorkersIdle: () => res(),
-          });
-        });
-
-        expect(taskQueue.failedTasks).toBe(0);
-      });
-
-      test('returns the number of tasks that have failed', async () => {
-        let i = 0;
-        const fn = vi.fn(() => {
-          i++;
-          if (i % 2 === 0) {
-            throw new Error('Task failed');
-          }
-        });
-        const severalTasks = Array.from({ length: 20 }, () => fn);
-
-        const taskQueue = new TaskQueue({
-          totalWorkers: 20,
-          tasks: severalTasks,
-        });
-
-        expect(taskQueue.completedTasks).toBe(0);
-
-        await new Promise<void>((res) => {
-          taskQueue.startExecution({
-            onWorkersIdle: () => res(),
-          });
-        });
-
-        expect(taskQueue.completedTasks).toBe(severalTasks.length / 2);
-        expect(taskQueue.failedTasks).toBe(severalTasks.length / 2);
-      });
+      expect(result.successfulTasks).toBe(0);
+      expect(result.failedTasks).toBe(20);
     });
 
-    describe('totalWorkers', () => {
-      test('returns the total number of workers assigned to the queue', () => {
-        const fn = vi.fn();
-        const severalTasks = Array.from({ length: 20 }, () => fn);
+    describe('errors', () => {
+      test('sends an error event when a task fails', async () => {
+        const err = new Error('Task failed');
+        const fn = vi.fn(() => Promise.reject(err));
+        const taskQueue = new TaskQueue({ totalWorkers: 5 });
 
-        const taskQueueA = new TaskQueue({
-          totalWorkers: 20,
-          tasks: severalTasks,
+        const errHandler = vi.fn((ev) => {
+          expect(ev.toString()).toBe(`TaskQueueErrorEvent: ${err}`);
         });
+        taskQueue.addEventListener(TaskQueue.TASK_ERROR_EVENT, errHandler);
 
-        expect(taskQueueA.totalWorkers).toBe(20);
+        taskQueue.addTask(fn);
 
-        const taskQueueB = new TaskQueue({
-          totalWorkers: 5,
-          tasks: severalTasks,
-        });
+        await taskQueue.waitForIdle();
 
-        expect(taskQueueB.totalWorkers).toBe(5);
-      });
-    });
-
-    describe('totalTasks', () => {
-      test('returns the total number of tasks in the queue', () => {
-        const fn = vi.fn(async () => wait(1));
-        const severalTasks = Array.from({ length: 20 }, () => fn);
-
-        const taskQueue = new TaskQueue({
-          totalWorkers: 20,
-          tasks: severalTasks,
-        });
-
-        expect(taskQueue.totalWorkers).toBe(20);
-      });
-
-      test('adding more tasks will increase the total tasks count', () => {
-        const fn = vi.fn();
-        const severalTasks = Array.from({ length: 20 }, () => fn);
-
-        const taskQueue = new TaskQueue({
-          totalWorkers: 20,
-          tasks: severalTasks,
-        });
-
-        expect(taskQueue.totalTasks).toBe(20);
-
-        taskQueue.addTasks([fn, fn, fn]);
-
-        expect(taskQueue.totalTasks).toBe(23);
-      });
-    });
-
-    describe('activeTasks', () => {
-      test('returns 0 if the queue has not started', () => {
-        const fn = vi.fn();
-        const severalTasks = Array.from({ length: 20 }, () => fn);
-
-        const taskQueue = new TaskQueue({
-          totalWorkers: 20,
-          tasks: severalTasks,
-        });
-
-        expect(taskQueue.activeTasks).toBe(0);
-      });
-
-      test('returns the number of tasks that are currently running', async () => {
-        expect.assertions(2);
-
-        const fn = vi.fn(async () => wait(1));
-        const severalTasks = Array.from({ length: 20 }, () => fn);
-
-        const taskQueue = new TaskQueue({
-          totalWorkers: 5,
-          tasks: severalTasks,
-        });
-
-        let i = 0;
-        await new Promise<void>((res, rej) => {
-          taskQueue.startExecution({
-            onWorkersIdle: () => res(),
-            onTaskCompleted() {
-              try {
-                i++;
-
-                if (i === 10) {
-                  expect(taskQueue.activeTasks).toBe(5);
-                }
-
-                if (i === 20) {
-                  expect(taskQueue.activeTasks).toBe(1);
-                }
-              } catch (_) {
-                rej();
-              }
-            },
-          });
-        });
-      });
-
-      test('returns 0 if all tasks have completed', async () => {
-        const fn = vi.fn();
-        const severalTasks = Array.from({ length: 20 }, () => fn);
-
-        const taskQueue = new TaskQueue({
-          totalWorkers: 20,
-          tasks: severalTasks,
-        });
-
-        await new Promise<void>((res) => {
-          taskQueue.startExecution({
-            onWorkersIdle: () => res(),
-          });
-        });
-
-        expect(taskQueue.activeTasks).toBe(0);
-      });
-    });
-
-    describe('idleWorkers', () => {
-      test('returns total workers if the queue has not started', () => {
-        const fn = vi.fn();
-        const severalTasks = Array.from({ length: 20 }, () => fn);
-
-        const taskQueue = new TaskQueue({
-          totalWorkers: 20,
-          tasks: severalTasks,
-        });
-
-        expect(taskQueue.idleWorkers).toBe(20);
-      });
-
-      test('returns 0 idle workers when tasks are running', async () => {
-        expect.assertions(1);
-        const fn = vi.fn();
-        const severalTasks = Array.from({ length: 300 }, () => fn);
-
-        const taskQueue = new TaskQueue({
-          totalWorkers: 20,
-          tasks: severalTasks,
-        });
-
-        await new Promise<void>((res, rej) => {
-          try {
-            taskQueue.startExecution({
-              onWorkersIdle: () => res(),
-            });
-            expect(taskQueue.idleWorkers).toBe(0);
-          } catch {
-            rej();
-          }
-        });
-      });
-
-      test('returns total workers if all tasks have completed', async () => {
-        expect.assertions(1);
-        const fn = vi.fn();
-        const severalTasks = Array.from({ length: 300 }, () => fn);
-
-        const taskQueue = new TaskQueue({
-          totalWorkers: 20,
-          tasks: severalTasks,
-        });
-
-        await new Promise<void>((res, rej) => {
-          try {
-            taskQueue.startExecution({
-              onWorkersIdle: () => res(),
-            });
-          } catch {
-            rej();
-          }
-        });
-
-        expect(taskQueue.idleWorkers).toBe(taskQueue.totalWorkers);
+        expect(errHandler).toHaveBeenCalledTimes(1);
       });
     });
   });
 
-  test('can execute several tasks at the same time', async () => {
-    const fn = vi.fn(async () => wait(1));
-    const severalTasks = Array.from({ length: 20 }, () => fn);
-
-    const taskQueue = new TaskQueue({
-      totalWorkers: 30,
-      tasks: severalTasks,
-    });
-
-    const start = performance.now();
-
-    await new Promise<void>((res, rej) => {
-      taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE, () => {
-        res();
-      });
-      taskQueue.addEventListener(TaskQueue.TASK_ERROR, () => {
-        rej();
-      });
-      taskQueue.startExecution();
-    });
-
-    const end = performance.now();
-
-    expect(fn).toHaveBeenCalledTimes(20);
-    expect(end - start).toBeLessThan(20);
-  });
-
-  test('provides information on completed and failed tasks', async () => {
-    const successfulTask = vi.fn(async () => wait(1));
-    const failingTask = vi.fn(
-      async () =>
-        new Promise<void>((res, rej) => {
-          setTimeout(() => {
-            rej(new Error('Task failed'));
-          }, 10);
-        }),
-    );
-
-    const successTasks = Array.from({ length: 10 }, () => successfulTask);
-    const failedTasks = Array.from({ length: 10 }, () => failingTask);
-
-    const taskQueue = new TaskQueue({
-      totalWorkers: 30,
-      tasks: [...successTasks, ...failedTasks],
-    });
-
-    const start = performance.now();
-
-    await new Promise<void>((res, rej) => {
-      taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE, (ev) => {
-        expect(ev instanceof TaskQueueCompletedEvent).toBe(true);
-        if (ev instanceof TaskQueueCompletedEvent) {
-          expect(ev.successfulTasks).toBe(10);
-          expect(ev.failedTasks).toBe(10);
-        } else {
-          rej();
-        }
-        res();
-      });
-      taskQueue.startExecution();
-    });
-
-    const end = performance.now();
-
-    expect(successfulTask).toHaveBeenCalledTimes(10);
-    expect(failingTask).toHaveBeenCalledTimes(10);
-    expect(end - start).toBeLessThan(20);
-  });
-
-  test('sends events for all failed and successful tasks', async () => {
-    const successfulTask = vi.fn(async () => wait(1));
-    const failingTask = vi.fn(
-      async () =>
-        new Promise<void>((res, rej) => {
-          setTimeout(() => {
-            rej(new Error('Task failed'));
-          }, 10);
-        }),
-    );
-
-    const successTasks = Array.from({ length: 10 }, () => successfulTask);
-    const failedTasks = Array.from({ length: 10 }, () => failingTask);
-
-    const taskQueue = new TaskQueue({
-      totalWorkers: 30,
-      tasks: [...successTasks, ...failedTasks],
-    });
-
-    const start = performance.now();
-
-    let totalFailed = 0;
-    let totalSuccessful = 0;
-    await new Promise<void>((res) => {
-      taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE, () => {
-        res();
-      });
-      taskQueue.addEventListener(TaskQueue.TASK_COMPLETED, () => {
-        totalSuccessful += 1;
-      });
-      taskQueue.addEventListener(TaskQueue.TASK_ERROR, () => {
-        totalFailed += 1;
-      });
-      taskQueue.startExecution();
-    });
-
-    const end = performance.now();
-
-    expect(totalFailed).toBe(10);
-    expect(totalSuccessful).toBe(10);
-    expect(successfulTask).toHaveBeenCalledTimes(10);
-    expect(failingTask).toHaveBeenCalledTimes(10);
-    expect(end - start).toBeLessThan(20);
-  });
-
-  test('Passes an error object with the TASK_ERROR event', async () => {
-    const failingTask = vi.fn(
-      async () =>
-        new Promise<void>((res, rej) => {
-          setTimeout(() => {
-            rej(new Error('Task failed'));
-          }, 10);
-        }),
-    );
-
-    const taskQueue = new TaskQueue({
-      totalWorkers: 30,
-      tasks: [failingTask],
-    });
-
-    await new Promise<void>((res) => {
-      taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE, () => {
-        res();
-      });
-      taskQueue.addEventListener(TaskQueue.TASK_ERROR, (ev) => {
-        expect(ev instanceof TaskQueueErrorEvent).toBe(true);
-        if (ev instanceof TaskQueueErrorEvent) {
-          expect(ev.error).toBeInstanceOf(Error);
-          expect((ev.error as Error).message).toBe('Task failed');
-        }
-      });
-      taskQueue.startExecution();
-    });
-
-    expect(failingTask).toHaveBeenCalledTimes(1);
-  });
-
-  test('can handle an empty task list', async () => {
-    const taskQueue = new TaskQueue({
-      totalWorkers: 30,
-      tasks: [],
-    });
-
-    await new Promise<void>((res, rej) => {
-      taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE, () => {
-        res();
-      });
-      taskQueue.addEventListener(TaskQueue.TASK_ERROR, () => {
-        rej();
-      });
-      taskQueue.startExecution();
-    });
-
-    expect(true).toBe(true);
-  });
-
-  test('can handle more tasks than workers', async () => {
-    const fn = vi.fn(async () => await wait(1));
-    const severalTasks = Array.from({ length: 100 }, () => fn);
-
-    const taskQueue = new TaskQueue({
-      totalWorkers: 30,
-      tasks: severalTasks,
-    });
-
-    const start = performance.now();
-
-    await new Promise<void>((res, rej) => {
-      taskQueue.startExecution();
-      taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE, () => {
-        res();
-      });
-      taskQueue.addEventListener(TaskQueue.TASK_ERROR, () => {
-        rej();
-      });
-    });
-
-    const end = performance.now();
-
-    // 100 tasks, 10ms per 30 workers. math.ceil(100 / 30) = 4.
-    // 10 ms per group = 40ms total.
-    expect(fn).toHaveBeenCalledTimes(100);
-    expect(end - start).toBeLessThan(50);
-  });
-
-  test('can retry failed tasks a set number of times', async () => {
-    const successfulTasks = vi.fn(async () => wait(1));
-
-    const failingTask = vi.fn(
-      async () =>
-        new Promise<void>((res, rej) => {
-          setTimeout(() => {
-            rej(new Error('Task failed'));
-          }, 1);
-        }),
-    );
-
-    const severalTasks = Array.from({ length: 20 }, () => successfulTasks);
-
-    const taskQueue = new TaskQueue({
-      totalWorkers: 30,
-      tasks: [failingTask, ...severalTasks],
-      retries: 3,
-    });
-
-    // 20 regular tasks and 1 failing task.
-    expect(taskQueue.totalTasks).toBe(21);
-
-    const ev = await new Promise<TaskQueueCompletedEvent>((res, rej) => {
-      taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE, (ev) => {
-        expect(ev instanceof TaskQueueCompletedEvent).toBe(true);
-        if (ev instanceof TaskQueueCompletedEvent) {
-          res(ev);
-        }
-
-        rej();
-      });
-      taskQueue.startExecution();
-    });
-
-    expect(ev.successfulTasks).toBe(20);
-    expect(ev.failedTasks).toBe(4);
-
-    // 21 total tasks, 20 above and 1 failing task retried 4 times
-    expect(ev.totalTasks).toBe(21);
-  });
-
-  test('shows a failed task that succeeds later as both failed and successful', async () => {
-    let run = false;
-    const failingTask = vi.fn(
-      async () =>
-        new Promise<void>((res, rej) => {
-          setTimeout(() => {
-            if (!run) {
-              run = true;
-              rej(new Error('Task failed'));
-            } else {
-              res();
-            }
-          }, 1);
-        }),
-    );
-
-    const taskQueue = new TaskQueue({
-      totalWorkers: 30,
-      tasks: [failingTask],
-      retries: 1,
-    });
-
-    const ev = await new Promise<TaskQueueCompletedEvent>((res, rej) => {
-      taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE, (ev) => {
-        expect(ev instanceof TaskQueueCompletedEvent).toBe(true);
-        if (ev instanceof TaskQueueCompletedEvent) {
-          res(ev);
-        }
-
-        rej();
-      });
-      taskQueue.startExecution();
-    });
-
-    expect(ev.successfulTasks).toBe(1);
-    expect(ev.failedTasks).toBe(1);
-
-    // 21 total tasks, 20 above and 1 failing task retried 1 time
-    expect(ev.totalTasks).toBe(1);
-  });
-
-  test('can stop a queue', async () => {
-    const fn = vi.fn(async () => wait(1));
-    const severalTasks = Array.from({ length: 20 }, () => fn);
-
-    const taskQueue = new TaskQueue({
-      totalWorkers: 5,
-      tasks: severalTasks,
-    });
-
-    await new Promise<void>((res, rej) => {
-      taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE, () => {
-        res();
-      });
-      taskQueue.addEventListener(TaskQueue.TASK_ERROR, () => {
-        rej();
-      });
-      taskQueue.startExecution();
-      taskQueue.stop();
-    });
-
-    // expect(fn).toHaveBeenCalledTimes(5);
-  });
-
-  test('event listeners can be cleared', async () => {
-    const fn = vi.fn(async () => wait(1));
-    const severalTasks = Array.from({ length: 20 }, () => fn);
-
-    const taskQueue = new TaskQueue({
-      totalWorkers: 5,
-      tasks: severalTasks,
-    });
-
-    let initialEventListnerRun = 0;
-
-    await new Promise<void>((res, rej) => {
-      taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE, () => {
-        res();
-        initialEventListnerRun += 1;
-
-        taskQueue.clearAllEventListeners();
-      });
-      taskQueue.addEventListener(TaskQueue.TASK_ERROR, () => {
-        rej();
-      });
-      taskQueue.startExecution();
-      taskQueue.stop();
-    });
-
-    await new Promise<void>((res, rej) => {
-      taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE, () => {
-        res();
-      });
-      taskQueue.addEventListener(TaskQueue.TASK_ERROR, () => {
-        rej();
-      });
-      taskQueue.startExecution();
-    });
-
-    expect(initialEventListnerRun).toBe(1);
-    expect(fn).toHaveBeenCalledTimes(20);
-  });
-
-  test('can restart after being stopped', async () => {
-    const fn = vi.fn(async () => wait(1));
-    const severalTasks = Array.from({ length: 20 }, () => fn);
-
-    const taskQueue = new TaskQueue({
-      totalWorkers: 5,
-      tasks: severalTasks,
-    });
-
-    await new Promise<void>((res, rej) => {
-      taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE, () => {
-        res();
-      });
-      taskQueue.addEventListener(TaskQueue.TASK_ERROR, () => {
-        rej();
-      });
-      taskQueue.startExecution();
-      taskQueue.stop();
-    });
-
-    taskQueue.clearAllEventListeners();
-
-    await new Promise<void>((res, rej) => {
-      taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE, () => {
-        res();
-      });
-      taskQueue.addEventListener(TaskQueue.TASK_ERROR, () => {
-        rej();
-      });
-      taskQueue.startExecution();
-    });
-
-    expect(fn).toHaveBeenCalledTimes(20);
-  });
-
-  test('Removes callbacks set on startExecution when restarted', async () => {
-    const fn = vi.fn(async () => wait(1));
-    const severalTasks = Array.from({ length: 20 }, () => fn);
-
-    const taskQueue = new TaskQueue({
-      totalWorkers: 30,
-      tasks: severalTasks,
-    });
-
-    const callback = vi.fn();
-    taskQueue.startExecution({
-      onWorkersIdle: () => {
-        callback();
-      },
-    });
-
-    await taskQueue.waitForIdle();
-
-    const fn2 = vi.fn(async () => wait(1));
-    const moreTasks = Array.from({ length: 20 }, () => fn2);
-    taskQueue.addTasks(moreTasks);
-
-    taskQueue.startExecution();
-
-    await taskQueue.waitForIdle();
-
-    expect(callback).toHaveBeenCalledTimes(1);
-    expect(fn).toHaveBeenCalledTimes(20);
-    expect(fn2).toHaveBeenCalledTimes(20);
-  });
-
-  test('the queue can be cleared', async () => {
-    const fn = vi.fn(async () => wait(1));
-    const severalTasks = Array.from({ length: 20 }, () => fn);
-
-    const taskQueue = new TaskQueue({
-      totalWorkers: 5,
-      tasks: severalTasks,
-    });
-
-    await new Promise<void>((res, rej) => {
-      taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE, () => {
-        res();
-      });
-      taskQueue.addEventListener(TaskQueue.TASK_ERROR, () => {
-        rej();
-      });
-      taskQueue.startExecution();
-      taskQueue.stop();
-    });
-
-    expect(fn).toHaveBeenCalledTimes(5);
-
-    taskQueue.clearAllEventListeners();
-    taskQueue.clearQueue();
-
-    await new Promise<void>((res, rej) => {
-      taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE, () => {
-        res();
-      });
-      taskQueue.addEventListener(TaskQueue.TASK_ERROR, () => {
-        rej();
-      });
-      taskQueue.startExecution();
-    });
-
-    // Unchanged
-    expect(fn).toHaveBeenCalledTimes(5);
-  });
-
-  test('on success callbacks provided will get called', async () => {
-    const fn = vi.fn(async () => wait(1));
-    const severalTasks = Array.from({ length: 20 }, () => fn);
-
-    const taskQueue = new TaskQueue({
-      totalWorkers: 30,
-      tasks: severalTasks,
-    });
-
-    const callBack = vi.fn();
-    await new Promise<void>((res) => {
-      taskQueue.startExecution({
-        onWorkersIdle() {
-          callBack();
-          res();
-        },
-      });
-    });
-
-    expect(callBack).toHaveBeenCalledTimes(1);
-    expect(fn).toHaveBeenCalledTimes(20);
-  });
-
-  test('on task error callbacks provided will get called', async () => {
-    let i = 0;
-    const fn = vi.fn(async () => {
-      i++;
-
-      // Random number
-      if (i === 5) {
-        throw new Error('Error');
+  describe('retries', () => {
+    test('on failure, a task will retry again', async () => {
+      function* partialRejection() {
+        yield Promise.reject(new Error('Task failed'));
+        yield Promise.resolve();
       }
+      const gen = partialRejection();
+      const fn = vi.fn(() => gen.next().value);
 
-      new Promise<void>((res) => {
-        setTimeout(() => {
-          res();
-        }, 10);
+      const taskQueue = new TaskQueue({ totalWorkers: 5, retries: 1 });
+
+      taskQueue.addTask(fn);
+
+      const result = await taskQueue.waitForIdle();
+
+      expect(fn).toHaveBeenCalledTimes(2);
+      expect(result.successfulTasks).toBe(1);
+      expect(result.failedTasks).toBe(0);
+    });
+
+    test('retries the task up to the specified number of retries', async () => {
+      const fn = vi.fn(() => Promise.reject('Task failed'));
+
+      const taskQueue = new TaskQueue({ totalWorkers: 5, retries: 3 });
+      taskQueue.addTask(fn);
+
+      const result = await taskQueue.waitForIdle();
+
+      expect(fn).toHaveBeenCalledTimes(4);
+      expect(result.successfulTasks).toBe(0);
+      expect(result.failedTasks).toBe(1);
+    });
+
+    test('runs a task only once if retries is set to 0', async () => {
+      const fn = vi.fn(() => Promise.reject(new Error('Task failed')));
+
+      const taskQueue = new TaskQueue({ totalWorkers: 5, retries: 0 });
+
+      taskQueue.addTask(fn);
+
+      const result = await taskQueue.waitForIdle();
+
+      expect(fn).toHaveBeenCalledTimes(1);
+      expect(result.successfulTasks).toBe(0);
+      expect(result.failedTasks).toBe(1);
+    });
+
+    test('pushes the failed task back to the queue if it has retries left', async () => {
+      let i = 0;
+
+      function* partialRejection() {
+        yield Promise.reject(new Error('Task failed'));
+        yield Promise.resolve();
+      }
+      const gen = partialRejection();
+
+      // This task will fail the first time, then get retries and get pushed to the end of
+      // the queue. The second time gen.next().value is called, its value will be a resolved
+      // promise and succeed. By then, the other 20 tasks in the queue will have been processed
+      const failingFn = vi.fn(async () => {
+        try {
+          const _value = await gen.next().value;
+          // Second time
+          expect(i).toBe(20);
+        } catch (e) {
+          // First time
+          expect(i).toBe(0);
+          throw e;
+        }
       });
-    });
-    const severalTasks = Array.from({ length: 20 }, () => fn);
 
-    const taskQueue = new TaskQueue({
-      totalWorkers: 30,
-      tasks: severalTasks,
-    });
+      const fn = vi.fn(() => ++i);
+      const severalTasks = Array.from({ length: 20 }, () => fn);
 
-    const callback = vi.fn();
-    await new Promise<void>((res) => {
-      taskQueue.startExecution({
-        onWorkersIdle() {
-          res();
-        },
-        onTaskError() {
-          callback();
-        },
-      });
-    });
+      const taskQueue = new TaskQueue({ totalWorkers: 5, retries: 1 });
 
-    expect(callback).toHaveBeenCalledTimes(1);
-    expect(fn).toHaveBeenCalledTimes(20);
+      taskQueue.addTask(failingFn);
+      taskQueue.addTask(severalTasks);
+    });
   });
 
-  test('on task completed callbacks provided will get called', async () => {
-    const fn = vi.fn(async () => wait(1));
-    const severalTasks = Array.from({ length: 20 }, () => fn);
+  describe('getters', () => {
+    describe('isIdle', () => {
+      test('returns true if all tasks are completed and there are no pending tasks', async () => {
+        const fn = vi.fn(() => wait(20));
+        const severalTasks = Array.from({ length: 20 }, () => fn);
 
-    const taskQueue = new TaskQueue({
-      totalWorkers: 30,
-      tasks: severalTasks,
+        const taskQueue = new TaskQueue({ totalWorkers: 20 });
+
+        taskQueue.addTask(severalTasks);
+
+        await taskQueue.waitForIdle();
+
+        expect(taskQueue.isIdle).toBe(true);
+        expect(taskQueue.pendingTasks).toBe(0);
+        expect(taskQueue.tasksRunning).toBe(0);
+      });
+
+      test('returns false if there are pending tasks', async () => {
+        const fn = vi.fn(() => wait(20));
+        const severalTasks = Array.from({ length: 20 }, () => fn);
+
+        const taskQueue = new TaskQueue({ totalWorkers: 20 });
+
+        taskQueue.addTask(severalTasks);
+
+        expect(taskQueue.isIdle).toBe(false);
+        expect(taskQueue.tasksRunning > 0).toBe(true);
+
+        await taskQueue.waitForIdle();
+      });
+
+      test('returns false if there are active workers', async () => {});
     });
 
-    const callback = vi.fn();
-    await new Promise<void>((res) => {
-      taskQueue.startExecution({
-        onWorkersIdle() {
-          res();
-        },
-        onTaskCompleted() {
-          callback();
-        },
+    describe('pendingTasks', () => {
+      test('returns the number of pending tasks', async () => {
+        const fn = vi.fn(() => wait(20));
+        const severalTasks = Array.from({ length: 20 }, () => fn);
+
+        const taskQueue = new TaskQueue({ totalWorkers: 20 });
+
+        taskQueue.addTask(severalTasks, { runImmediately: false });
+
+        expect(taskQueue.isIdle).toBe(true);
+        expect(taskQueue.pendingTasks).toBe(severalTasks.length);
+        expect(taskQueue.tasksRunning).toBe(0);
+      });
+
+      test('returns the number of pending tasks while some tasks are running', async () => {
+        const fn = vi.fn(() => wait(20));
+        const severalTasks = Array.from({ length: 20 }, () => fn);
+
+        const taskQueue = new TaskQueue({ totalWorkers: 5 });
+
+        taskQueue.addTask(severalTasks);
+
+        expect(taskQueue.isIdle).toBe(false);
+        expect(taskQueue.pendingTasks).toBe(15);
+        expect(taskQueue.tasksRunning > 0).toBe(true);
+
+        await taskQueue.waitForIdle();
+      });
+
+      test('returns zero if there are no pending tasks', () => {
+        const taskQueue = new TaskQueue({ totalWorkers: 20 });
+
+        expect(taskQueue.isIdle).toBe(true);
+        expect(taskQueue.pendingTasks).toBe(0);
+        expect(taskQueue.tasksRunning).toBe(0);
+      });
+
+      test('returns zero if all pending tasks are completed', async () => {
+        const fn = vi.fn(() => wait(20));
+        const severalTasks = Array.from({ length: 20 }, () => fn);
+
+        const taskQueue = new TaskQueue({ totalWorkers: 20 });
+
+        taskQueue.addTask(severalTasks);
+
+        await taskQueue.waitForIdle();
+
+        expect(taskQueue.isIdle).toBe(true);
+        expect(taskQueue.pendingTasks).toBe(0);
+        expect(taskQueue.tasksRunning).toBe(0);
       });
     });
 
-    expect(callback).toHaveBeenCalledTimes(20);
-    expect(fn).toHaveBeenCalledTimes(20);
-  });
+    describe('tasksRunning', () => {
+      test('returns the number of active workers', () => {
+        const fn = vi.fn(() => wait(20));
+        const severalTasks = Array.from({ length: 20 }, () => fn);
 
-  test('Does nothing extra if startExecution is called while running', async () => {
-    const fn = vi.fn(async () => wait(1));
-    const severalTasks = Array.from({ length: 20 }, () => fn);
+        const taskQueue = new TaskQueue({ totalWorkers: 5 });
 
-    const taskQueue = new TaskQueue({
-      totalWorkers: 2,
-      tasks: severalTasks,
+        taskQueue.addTask(severalTasks);
+
+        expect(taskQueue.isIdle).toBe(false);
+        expect(taskQueue.tasksRunning).toBe(5);
+      });
+
+      test('returns zero if there are no active workers', () => {
+        const taskQueue = new TaskQueue({ totalWorkers: 5 });
+
+        expect(taskQueue.isIdle).toBe(true);
+        expect(taskQueue.tasksRunning).toBe(0);
+      });
+
+      test('returns zero when all workers have completed their tasks', async () => {
+        const fn = vi.fn(() => wait(20));
+        const severalTasks = Array.from({ length: 20 }, () => fn);
+
+        const taskQueue = new TaskQueue({ totalWorkers: 5 });
+
+        taskQueue.addTask(severalTasks);
+
+        await taskQueue.waitForIdle();
+
+        expect(taskQueue.isIdle).toBe(true);
+        expect(taskQueue.tasksRunning).toBe(0);
+      });
     });
-
-    taskQueue.startExecution();
-    await wait(3);
-
-    expect(taskQueue.completedTasks).toBeGreaterThan(0);
-
-    taskQueue.startExecution();
-
-    await taskQueue.waitForIdle();
-
-    expect(fn).toHaveBeenCalledTimes(20);
-  });
-
-  test('Callbacks can be added later', async () => {
-    const fn = vi.fn(async () => wait(1));
-    const severalTasks = Array.from({ length: 20 }, () => fn);
-
-    const taskQueue = new TaskQueue({
-      totalWorkers: 2,
-      tasks: severalTasks,
-    });
-
-    taskQueue.startExecution();
-    await wait(3);
-
-    expect(taskQueue.completedTasks).toBeGreaterThan(0);
-
-    const complete = vi.fn();
-    taskQueue.startExecution({
-      onWorkersIdle: () => complete(),
-    });
-
-    await taskQueue.waitForIdle();
-
-    expect(fn).toHaveBeenCalledTimes(20);
-    expect(complete).toHaveBeenCalledTimes(1);
   });
 
   describe('waitForIdle', () => {
-    test('resolves when all tasks are complete', async () => {
-      const fn = vi.fn(async () => wait(1));
+    test('resolves immediately if the queue is already idle', async () => {
+      const taskQueue = new TaskQueue();
+
+      expect(taskQueue.isIdle).toBe(true);
+
+      const result = await taskQueue.waitForIdle();
+
+      expect(result.successfulTasks).toBe(0);
+      expect(result.failedTasks).toBe(0);
+    });
+
+    test('resolves after all tasks are completed', async () => {
+      const fn = vi.fn(() => wait(20));
       const severalTasks = Array.from({ length: 20 }, () => fn);
 
-      const taskQueue = new TaskQueue({
-        totalWorkers: 5,
-        tasks: severalTasks,
-      });
+      const taskQueue = new TaskQueue({ totalWorkers: 20 });
+      taskQueue.addTask(severalTasks);
 
-      taskQueue.startExecution();
+      expect(taskQueue.isIdle).toBe(false);
+
+      const result = await taskQueue.waitForIdle();
+
+      expect(result.successfulTasks).toBe(20);
+      expect(result.failedTasks).toBe(0);
+    });
+
+    test('resolves even if tasks fail', async () => {
+      const fn = vi.fn(() => wait(20));
+      const failingFn = vi.fn(() => Promise.reject(new Error('Task failed')));
+
+      const severalTasks = Array.from({ length: 10 }, () => fn);
+      severalTasks.push(failingFn);
+
+      const taskQueue = new TaskQueue({ totalWorkers: 20 });
+      taskQueue.addTask(severalTasks);
+
+      expect(taskQueue.isIdle).toBe(false);
+
+      const result = await taskQueue.waitForIdle();
+
+      expect(result.successfulTasks).toBe(10);
+      expect(result.failedTasks).toBe(1);
+    });
+  });
+
+  describe('addTask', () => {
+    test('adds a task and immediately runs the task', async () => {
+      const fn = vi.fn(() => wait(20));
+      const taskQueue = new TaskQueue();
+
+      expect(taskQueue.isIdle).toBe(true);
+
+      taskQueue.addTask(fn);
+
+      expect(taskQueue.isIdle).toBe(false);
+
+      await taskQueue.waitForIdle();
+    });
+
+    test('adds a task and does not immediately run the task', async () => {
+      const fn = vi.fn(() => wait(20));
+      const severalTasks = Array.from({ length: 20 }, () => fn);
+
+      const taskQueue = new TaskQueue();
+
+      expect(taskQueue.isIdle).toBe(true);
+
+      taskQueue.addTask(severalTasks, { runImmediately: false });
+
+      expect(taskQueue.isIdle).toBe(true);
+      expect(taskQueue.pendingTasks).toBe(20);
+    });
+  });
+
+  describe('stop', () => {
+    test('stops all workers and prevents new tasks from running', async () => {
+      const fn = vi.fn();
+      const severalTasks = Array.from({ length: 20 }, () => fn);
+
+      const taskQueue = new TaskQueue({ totalWorkers: 5 });
+
+      taskQueue.addTask(severalTasks);
+
+      taskQueue.stop();
+
+      await taskQueue.waitForIdle();
+
+      expect(fn).toHaveBeenCalledTimes(5);
+      expect(taskQueue.isIdle).toBe(true);
+      expect(taskQueue.pendingTasks).toBe(15);
+    });
+
+    test('does nothing if the queue is already stopped', async () => {
+      const fn = vi.fn();
+      const severalTasks = Array.from({ length: 20 }, () => fn);
+
+      const taskQueue = new TaskQueue({ totalWorkers: 5 });
+
+      taskQueue.addTask(severalTasks, { runImmediately: false });
+
+      taskQueue.stop();
+
+      expect(fn).not.toHaveBeenCalled();
+      expect(taskQueue.isIdle).toBe(true);
+      expect(taskQueue.pendingTasks).toBe(20);
+    });
+
+    test('does nothing if the queue is empty', async () => {
+      const taskQueue = new TaskQueue({ totalWorkers: 5 });
+
+      taskQueue.stop();
+
+      expect(taskQueue.isIdle).toBe(true);
+      expect(taskQueue.pendingTasks).toBe(0);
+    });
+  });
+
+  describe('start', () => {
+    test('starts processing tasks in the queue again', async () => {
+      const fn = vi.fn(() => wait(20));
+      const severalTasks = Array.from({ length: 20 }, () => fn);
+
+      const taskQueue = new TaskQueue({ totalWorkers: 20 });
+      taskQueue.addTask(severalTasks, { runImmediately: false });
+
+      expect(taskQueue.isIdle).toBe(true);
+      expect(taskQueue.pendingTasks).toBe(20);
+      expect(taskQueue.tasksRunning).toBe(0);
+
+      taskQueue.start();
+
+      expect(taskQueue.isIdle).toBe(false);
+      expect(taskQueue.pendingTasks).toBe(0);
+      expect(taskQueue.tasksRunning).toBe(20);
 
       await taskQueue.waitForIdle();
 
       expect(fn).toHaveBeenCalledTimes(20);
     });
 
-    test('resolves immediately if the queue is already idle', async () => {
-      const fn = vi.fn(async () => wait(1));
-      const severalTasks = Array.from({ length: 20 }, () => fn);
+    test('does nothing if there are no tasks in the queue', () => {
+      const taskQueue = new TaskQueue({ totalWorkers: 20 });
 
-      const taskQueue = new TaskQueue({
-        totalWorkers: 5,
-        tasks: severalTasks,
-      });
+      expect(taskQueue.isIdle).toBe(true);
+      expect(taskQueue.pendingTasks).toBe(0);
+      expect(taskQueue.tasksRunning).toBe(0);
 
-      await taskQueue.waitForIdle();
+      taskQueue.start();
 
-      expect(fn).toHaveBeenCalledTimes(0);
+      expect(taskQueue.isIdle).toBe(true);
+      expect(taskQueue.pendingTasks).toBe(0);
+      expect(taskQueue.tasksRunning).toBe(0);
     });
 
-    test('does not throw if any task fails', async () => {
-      const errFn = vi.fn(async () => {
-        throw new Error('Task failed');
-      });
-      const fn = vi.fn(async () => wait(1));
-      const severalTasks = [];
-      severalTasks.push(...Array.from({ length: 10 }, () => fn));
-      severalTasks.push(errFn);
-      severalTasks.push(...Array.from({ length: 10 }, () => fn));
+    test('continues processing after stop is called', async () => {
+      const fn = vi.fn();
+      const severalTasks = Array.from({ length: 20 }, () => fn);
 
-      const taskQueue = new TaskQueue({
-        totalWorkers: 5,
-        tasks: severalTasks,
-      });
+      const taskQueue = new TaskQueue({ totalWorkers: 5 });
 
-      taskQueue.startExecution();
+      taskQueue.addTask(severalTasks);
+
+      taskQueue.stop();
 
       await taskQueue.waitForIdle();
 
-      expect(fn).toHaveBeenCalled();
-      expect(errFn).toHaveBeenCalledTimes(1);
+      expect(fn).toHaveBeenCalledTimes(5);
+      expect(taskQueue.isIdle).toBe(true);
+      expect(taskQueue.pendingTasks).toBe(15);
+
+      taskQueue.start();
+
+      await taskQueue.waitForIdle();
+
+      expect(fn).toHaveBeenCalledTimes(20);
+      expect(taskQueue.isIdle).toBe(true);
+      expect(taskQueue.pendingTasks).toBe(0);
     });
   });
 });
