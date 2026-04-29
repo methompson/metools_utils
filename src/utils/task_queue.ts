@@ -172,6 +172,18 @@ export class TaskQueue extends EventTarget {
     return Object.keys(this._workers).length;
   }
 
+  get totalWorkers() {
+    return this._totalWorkers;
+  }
+  set totalWorkers(workers: number) {
+    this._totalWorkers = workers;
+
+    // If we have more workers available than tasks running, we can run more tasks
+    if (this.canDoMoreWork) {
+      this.runNext();
+    }
+  }
+
   /**
    * Adds a task to the queue. When added, a task will be processed
    * immediately and run during the normal course of the queue,

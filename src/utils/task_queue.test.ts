@@ -285,6 +285,106 @@ describe('TaskQueue', () => {
         expect(taskQueue.tasksRunning).toBe(0);
       });
     });
+
+    describe('totalWorkers', () => {
+      test('returns the total number of workers', () => {
+        const taskQueue = new TaskQueue({ totalWorkers: 10 });
+        expect(taskQueue.totalWorkers).toBe(10);
+      });
+
+      test('allows setting the total number of workers', () => {
+        const taskQueue = new TaskQueue({ totalWorkers: 5 });
+        expect(taskQueue.totalWorkers).toBe(5);
+
+        taskQueue.totalWorkers = 10;
+        expect(taskQueue.totalWorkers).toBe(10);
+      });
+
+      test('starts running more tasks if totalWorkers is increased and there are pending tasks', async () => {
+        const fn = vi.fn(() => wait(20));
+        const severalTasks = Array.from({ length: 20 }, () => fn);
+
+        const taskQueue = new TaskQueue({ totalWorkers: 5 });
+
+        taskQueue.addTask(severalTasks);
+
+        expect(taskQueue.isIdle).toBe(false);
+        expect(taskQueue.tasksRunning).toBe(5);
+        expect(taskQueue.pendingTasks).toBe(15);
+
+        taskQueue.totalWorkers = 10;
+
+        expect(taskQueue.tasksRunning).toBe(10);
+        expect(taskQueue.pendingTasks).toBe(10);
+
+        await taskQueue.waitForIdle();
+
+        expect(fn).toHaveBeenCalledTimes(20);
+      });
+
+      test('does not start running more tasks if totalWorkers is increased but there are no pending tasks', async () => {
+        const tq = new TaskQueue({ totalWorkers: 5 });
+        expect(tq.totalWorkers).toBe(5);
+
+        tq.totalWorkers = 10;
+        expect(tq.totalWorkers).toBe(10);
+        expect(tq.tasksRunning).toBe(0);
+      });
+
+      test('does not start running more tasks if totalWorkers is increased but the queue is stopped', async () => {
+        const fn = vi.fn(() => wait(20));
+        const severalTasks = Array.from({ length: 20 }, () => fn);
+        const taskQueue = new TaskQueue({ totalWorkers: 5 });
+
+        taskQueue.addTask(severalTasks);
+
+        expect(taskQueue.isIdle).toBe(false);
+        expect(taskQueue.tasksRunning).toBe(5);
+        expect(taskQueue.pendingTasks).toBe(15);
+
+        taskQueue.stop();
+
+        taskQueue.totalWorkers = 10;
+        expect(taskQueue.tasksRunning).toBe(5);
+
+        const result = await taskQueue.waitForIdle();
+
+        expect(taskQueue.tasksRunning).toBe(0);
+        expect(taskQueue.pendingTasks).toBe(15);
+        expect(result.successfulTasks).toBe(5);
+      });
+
+      test('does not start running more tasks if totalWorkers is decreased', async () => {
+        const fn = vi.fn(() => wait(20));
+        const severalTasks = Array.from({ length: 20 }, () => fn);
+
+        const taskQueue = new TaskQueue({ totalWorkers: 10 });
+
+        taskQueue.addTask(severalTasks);
+
+        expect(taskQueue.isIdle).toBe(false);
+        expect(taskQueue.tasksRunning).toBe(10);
+        expect(taskQueue.pendingTasks).toBe(10);
+
+        taskQueue.totalWorkers = 5;
+
+        expect(taskQueue.tasksRunning).toBe(10);
+        expect(taskQueue.pendingTasks).toBe(10);
+
+        taskQueue.stop();
+
+        await taskQueue.waitForIdle();
+
+        taskQueue.start();
+
+        expect(taskQueue.tasksRunning).toBe(5);
+        expect(taskQueue.pendingTasks).toBe(5);
+
+        await taskQueue.waitForIdle();
+
+        expect(fn).toHaveBeenCalledTimes(20);
+      });
+    });
   });
 
   describe('waitForIdle', () => {
