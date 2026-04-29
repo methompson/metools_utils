@@ -172,6 +172,14 @@ export class TaskQueue extends EventTarget {
     return Object.keys(this._workers).length;
   }
 
+  /**
+   * Returns the total number of workers that can run in parallel. This value
+   * can be changed and will affect how many tasks can run in parallel. When
+   * the value is increased, more tasks will run in parallel immediately.
+   * When the value is decreased, none of the tasks will stop until they
+   * finish, but no new tasks will start until the number of running tasks
+   * is less than the totalWorkers value.
+   */
   get totalWorkers() {
     return this._totalWorkers;
   }
