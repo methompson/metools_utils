@@ -203,30 +203,39 @@ const [pass, fail] = split(arr, (el) => typeof el === 'number');
 ## TaskQueue
 
 ```ts
-type TaskType = () => Promise<unknown> | (() => unknown);
+type Task<T> = () => T | Promise<T>;
 
-interface TaskQueueConstructorInput {
-  totalWorkers?: number; // Defaults to 30
-  tasks: TaskType[]; // Pre-fills the tasks
-  retries?: number; // Adds a quantity of retries for each failed task
+interface TaskQueueArgs {
+  totalWorkers?: number;
+  tasks?: Task<unknown>[];
+  runImmediately?: boolean;
+  retries?: number;
 }
 
-interface RunTaskQueueArgs extends TaskQueueConstructorInput {
-  onWorkersIdle?: (ev: TaskQueueCompletedEvent) => void | Promise<void>; // Callback for when all workers are idle and all tasks are finished.
-  onTaskError?: (error: unknown) => void | Promise<void>; // Callback for when an individual task errors
-  onTaskCompleted?: () => void | Promise<void>; // Callback for when a task completes
+interface AddTaskArgs {
+  runImmediately?: boolean;
 }
 
 class TaskQueue extends EventTarget;
 
+constructor TaskQueue(args: TaskQueueArgs): TaskQueue;
+
 // Methods
-constructor TaskQueue(args: TaskQueueConstructorInput): TaskQueue;
 // Adds more tasks. Can be run while tasks are executing to add more tasks
-TaskQueue.addTasks(task: TaskType | TaskType[]): void
-// Starts executing the tasks.
-TaskQueue.startExecution(args?: RunTaskQueueArgs): void;
-// Waits for idle
-TaskQueue.waitForIdle(): Promise<TaskQueueCompletedEvent>
+TaskQueue.addTask(task: Task<unknown> | Task<unknown>[], args?: AddTaskArgs): void
+// Stops executing the tasks. Tasks that are currently running will finish.
+TaskQueue.stop(): void;
+// Starts executing the tasks. Does nothing if tasks are already running.
+TaskQueue.start(): Promise<TaskQueueCompletedEvent>
+// Convenience method to wait for all tasks to complete. Effectively the same
+// as using an event listener for the ALL_WORKERS_IDLE event.
+TaskQueue.waitForIdle(): Promise<TaskQueueCompletedEvent>;
+
+// Properties
+TaskQueue.totalWorkers: number;  // The total number of workers that can run in parallel. This value can be changed and will affect how many tasks can run in parallel. When the value is increased, more tasks will run in parallel immediately. When the value is decreased, none of the tasks will stop until they finish, but no new tasks will start until the number of running tasks is less than the totalWorkers value.
+TaskQueue.isIdle: boolean;  // Indicates whether the queue is idle. In this case, idle means that there are no tasks running.
+TaskQueue.pendingTasks: number;  // The number of tasks that are pending
+TaskQueue.tasksRunning: number;  // The number of tasks that are currently running
 
 // Static Values
 TaskQueue.ALL_WORKERS_IDLE  // Event name for when all workers are idle
@@ -243,9 +252,9 @@ TaskQueueCompletedEvent.totalTasks: number;       // The total number of tasks t
 
 The `TaskQueue` class is a task runner that runs an arbitrary quantity of tasks in parallel. The purpose is to provide a controllable means to run many tasks at the same time without using all available resources and slowing down other parts of the application.
 
-The `TaskQueue` is a task runner that aims to run an arbitrary quantity of tasks (chosen by the programmer) at the same time. It differs from slicing up arrays and using `Promise.all` or `Promise.allSettled` by pulling the next task from a list and immediately running it as soon as the previous task has finished. This allows the application to run multiple work loads in parallel up to a maximum quantity, but also doesn't require that all tasks are finished before the next batch can start.
+It differs from slicing up arrays and using `Promise.all` or `Promise.allSettled` by pulling the next task from a list and immediately running it as soon as the previous task has finished. This allows the application to run multiple work loads in parallel up to a maximum quantity, but also doesn't require that all tasks are finished before the next batch can start.
 
-The `TaskQueue` was designed to solve problems related to running many operations at the same time. An application may need to reach out to many URLs to perform operations or may need to read hundreds of files to process. In such a situation, a serial operation (sequentially running and completing each task) may take a long time and a strictly parallel operation may consume all available resources for a period of time, rendering the application unresponsive. One could slice up a large group of tasks (functions the perform a unit of work and are done once they complete) into many smaller arrays and use `Promise.all` or `Promise.allSettled`. The problem is that if one operation hangs, all operations will hang on completion until that one operation is finished.
+The `TaskQueue` was designed to solve problems related to running many operations at the same time. An application may need to reach out to many URLs to perform operations or may need to read hundreds of files to process. In such a situation, a serial operation (sequentially running and completing each task) may take a long time and a strictly parallel operation may consume all available resources for a period of time, rendering the application unresponsive. One could slice up a large group of tasks (functions that perform a unit of work and are done once they complete) into many smaller arrays and use `Promise.all` or `Promise.allSettled`. The problem is that if one operation hangs, all operations will hang on completion until that one operation is finished.
 
 In these examples, the `TaskQueue` class would be able to help as a mediator. The `TaskQueue` runs the next operation in a list as soon as the previous operation finished, which means that one hanging operation may tie up a single worker, but the remaining workers can still run operations.
 
@@ -253,10 +262,9 @@ The `TaskQueue` can run synchronous tasks, but is mostly meant for asynchronous 
 
 ### Waiting for Completion
 
-The `TaskQueue` has three different ways to wait for completion:
+The `TaskQueue` has two different ways to wait for completion:
 
 * Adding an event listener
-* Adding a callback
 * awaiting the `waitForIdle` method
 
 The `TaskQueue` is an `EventTarget` and emits 3 different events:
@@ -267,13 +275,7 @@ The `TaskQueue` is an `EventTarget` and emits 3 different events:
 
 `TaskQueue.TASK_COMPLETED` is emitted when a task completes. The queue will continue to run other tasks.
 
-The `startExecution` method also provides 3 separate callback options to be called at various times like above. See the `RunTaskQueueArgs` arguments above.
-
-* `onWorkersIdle` - Runs when all workers are idle. Calls the function with a `TaskQueueCompletedEvent` with stats about the tasks run
-* `onTaskError` - Runs when any task errors. Calls the function with the error that was thrown when the task errored out.
-* `onTaskCompleted` - Runs when any task completed.
-
-Finally, a method is available that resolves when all tasks are completed: `waitForIdle`. `waitForIdle` only completes when all workers are idle. It will not throw if any task errors.
+A method is available that resolves when all tasks are completed: `waitForIdle`. `waitForIdle` only completes when all workers are idle. It will not throw if any task errors.
 
 ### Examples
 
@@ -282,36 +284,21 @@ import { TaskQueue } from '@metools/utils';
 
 const tr = new TaskQueue({ totalWorkers: 5 }); // Set it to 5 workers
 
+/** Uses the Event Listener API to listen for when all workers are idle. */
 async function listenForCompletion(tasks) {
-  taskQueue.addTasks(tasks)
+  const tq = new TaskQueue({ totalWorkers: 5 });
 
-  // Use a listener & promise to wait until completion
-  return new Promise<void>((res) => {
-    const cb = () => {
-      // Removes the listener so that it doesn't always get called
-      taskQueue.removeEventListener(TaskQueue.ALL_WORKERS_IDLE, cb);
-      // Resolve the promise
+  return new Promise((res) => {
+    tq.addEventListener(TaskQueue.ALL_WORKERS_IDLE, () => {
+      console.log('All Tasks Completed')
       res();
-    };
-
-    taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE, cb);
-
-    // Runs the Task Queue
-    taskQueue.startExecution();
-  });
-}
-
-async function useCallbacksForCompletion(tasks) {
-  taskQueue.addTasks(tasks);
-
-  return new Promise<void>((res) => {
-    // Resolves te promise when all workers are idle
-    taskQueue.startExecution({
-      onWorkersIdle: () => res(),
     });
+
+    tq.addTask(tasks);
   });
 }
 
+/** Uses the waitForIdle method to wait for all workers to be idle. */
 async function useWaitForIdle(tasks) {
   taskQueue.addTasks(tasks);
   taskQueue.startExecution();
@@ -344,24 +331,9 @@ const taskQueue = new TaskQueue({
   tasks,
 });
 
-await new Promise<void>((res) => {
-  taskQueue.addEventListener(TaskQueue.ALL_WORKERS_IDLE, () => {
-    console.log('All Tasks Completed')
-    res();
-  });
-  taskQueue.addEventListener(TaskQueue.TASK_COMPLETED, () => {
-    console.log('Task Has Completed')
-  });
-  taskQueue.addEventListener(TaskQueue.TASK_ERROR, (ev) => {
-    if (ev instanceof TaskQueueErrorEvent) {
-      const err = ev.error;
-      console.error(`Task has errored: ${err}`)
-    } else {
-      console.error('Task has errored');
-    }
-  });
-  taskQueue.startExecution();
-});
+// Starts the tasks immediately
+taskQueue.addTask(tasks);
+await taskQueue.waitForIdle();
 ```
 
 ## wait
